@@ -1,0 +1,6 @@
+﻿{
+  "ssh_key": "C:\\Users\\you\\.ssh\\id_ed25519.pem",
+  "ssh_host": "root@your-server-ip",
+  "umo_xia07": "qq_official:FriendMessage:<openid>",
+  "umo_mi": "napcat:GroupMessage:<group_id>"
+}

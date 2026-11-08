@@ -1,0 +1,321 @@
+#!/usr/bin/env python3
+"""双 Bot 监测台 —— 本地跑，通过 SSH 读服务器状态。
+
+用法： python tools/botmon/server.py  [--port 8791]
+打开： http://127.0.0.1:8791
+"""
+import argparse
+import base64
+import json
+import os
+import subprocess
+import threading
+import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+KEY = os.environ.get("BOTMON_KEY", r"C:\Users\76133\.ssh\aliyun-deploy\id_ed25519.pem")
+HOST = os.environ.get("BOTMON_HOST", "root@120.26.173.179")
+REMOTE_PROBE = "/opt/botmon/probe.py"
+
+STATE = {"data": {}, "qr": b"", "err": "", "at": 0.0}
+LOCK = threading.Lock()
+
+
+# exe 是 --windowed 的（没有控制台），每次起 ssh 子进程 Windows 都会给它新开一个
+# 控制台窗口——轮询 5 秒一次，屏幕上就一直闪黑框。必须显式禁止创建窗口。
+_CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
+
+
+def _hidden_si():
+    if os.name != "nt":
+        return None
+    si = subprocess.STARTUPINFO()
+    si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    si.wShowWindow = 0          # SW_HIDE
+    return si
+
+
+def ssh(cmd, timeout=40):
+    # 必须显式 utf-8：Windows 默认按 GBK 解码，中文会炸成 UnicodeDecodeError 并把 stdout 变成 None
+    return subprocess.run(
+        ["ssh", "-i", KEY, "-o", "StrictHostKeyChecking=no",
+         "-o", "ConnectTimeout=12", "-o", "BatchMode=yes", HOST, cmd],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        timeout=timeout, creationflags=_CREATE_NO_WINDOW, startupinfo=_hidden_si())
+
+
+def poll_loop(interval=5.0):
+    while True:
+        try:
+            r = ssh("python3 %s" % REMOTE_PROBE)
+            if r.returncode == 0 and r.stdout.strip():
+                data = json.loads(r.stdout)
+                qr = ssh("docker exec napcat sh -c 'base64 -w0 /app/napcat/cache/qrcode.png'")
+                png = b""
+                if qr.returncode == 0 and qr.stdout.strip():
+                    try:
+                        png = base64.b64decode(qr.stdout.strip())
+                    except Exception:
+                        png = b""
+                with LOCK:
+                    STATE["data"] = data
+                    STATE["at"] = time.time()
+                    STATE["err"] = ""
+                    if png:
+                        STATE["qr"] = png
+            else:
+                with LOCK:
+                    STATE["err"] = (r.stderr or "probe 失败")[-300:]
+        except Exception as e:  # noqa: BLE001
+            with LOCK:
+                STATE["err"] = str(e)[:300]
+        time.sleep(interval)
+
+
+ACTIONS = {
+    "restart-napcat": "docker restart napcat",
+    "restart-astrbot": "docker restart astrbot",
+    "watchdog": "python3 /opt/napcat-watch/watchdog.py; tail -1 /var/log/napcat-watch.log",
+    "logs-napcat": "docker logs --since 5m napcat 2>&1 | grep -avE '^[0-9a-f]{64}' | tail -25",
+    "logs-astrbot": "docker logs --since 5m astrbot 2>&1 | sed 's/\\x1b\\[[0-9;]*m//g' | grep -avE 'DBUG' | tail -25",
+}
+
+PAGE = """<!doctype html><html lang="zh"><head><meta charset="utf-8">
+<title>夏07 / 小米 监测台</title>
+<style>
+ :root{--bg:#0b0d12;--card:#151a23;--line:#232b38;--txt:#e8ecf4;--dim:#8b95a8;
+       --ok:#39d98a;--warn:#f0b429;--bad:#ff5c5c}
+ *{box-sizing:border-box}
+ body{margin:0;background:var(--bg);color:var(--txt);
+      font:14px/1.5 system-ui,"Segoe UI","Microsoft YaHei",sans-serif}
+ .wrap{max-width:1080px;margin:0 auto;padding:22px 20px 40px}
+ h1{font-size:17px;font-weight:600;margin:0 0 4px}
+ .sub{color:var(--dim);font-size:12px;margin-bottom:18px}
+ .grid{display:grid;grid-template-columns:1fr 1fr 300px;gap:14px}
+ @media(max-width:900px){.grid{grid-template-columns:1fr}}
+ .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px}
+ .card h2{font-size:13px;font-weight:600;color:var(--dim);margin:0 0 12px;
+          letter-spacing:.04em;text-transform:uppercase}
+ .row{display:flex;justify-content:space-between;align-items:baseline;margin:7px 0}
+ .k{color:var(--dim);font-size:12.5px}
+ .v{font-variant-numeric:tabular-nums}
+ .dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:7px}
+ .on{background:var(--ok);box-shadow:0 0 10px var(--ok)}
+ .off{background:var(--bad);box-shadow:0 0 10px var(--bad)}
+ .wait{background:var(--warn);box-shadow:0 0 10px var(--warn)}
+ .name{font-size:16px;font-weight:600}
+ .big{font-size:26px;font-weight:600;font-variant-numeric:tabular-nums}
+ .bar{height:6px;background:#1e2530;border-radius:4px;overflow:hidden;margin-top:6px}
+ .bar i{display:block;height:100%;background:linear-gradient(90deg,#4d8dff,#7fe0a8)}
+ .qrbox{background:#fff;padding:10px;border-radius:12px;display:inline-block}
+ .qrbox img{display:block;width:230px;height:230px;image-rendering:pixelated}
+ .btns{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}
+ button{background:#1d2431;color:var(--txt);border:1px solid var(--line);
+        padding:8px 13px;border-radius:9px;cursor:pointer;font-size:13px}
+ button:hover{background:#26303f}
+ button.danger{border-color:#5b2a2a}
+ button.danger:hover{background:#3a1d1d}
+ pre{background:#0e1219;border:1px solid var(--line);border-radius:10px;
+     padding:10px;font-size:11.5px;color:#b9c4d4;overflow:auto;max-height:230px;
+     white-space:pre-wrap;margin:10px 0 0}
+ .warnline{color:var(--warn)}
+ .err{color:var(--bad);font-size:12px;margin-top:8px}
+ .chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+ .chip{background:#1b2230;border:1px solid var(--line);border-radius:999px;
+       padding:2px 9px;font-size:11.5px;color:#b9c4d4}
+</style></head><body><div class="wrap">
+<h1>夏07 / 小米 监测台</h1>
+<div class="sub" id="sub">连接中…</div>
+
+<div class="grid">
+  <div class="card">
+    <h2>夏07 · QQ 官方 Bot</h2>
+    <div class="row"><span class="name"><span class="dot" id="x7dot"></span>夏07</span>
+      <span id="x7state" class="v">—</span></div>
+    <div class="row"><span class="k">近 10 分钟事件</span><span class="v" id="x7msg">—</span></div>
+    <div class="row"><span class="k">容器</span><span class="v" id="abox">—</span></div>
+    <div class="row"><span class="k">私聊审计</span><span class="v" id="x7audit">—</span></div>
+    <div class="chips" id="x7chips"></div>
+  </div>
+
+  <div class="card">
+    <h2>小米 · NapCat 协议端</h2>
+    <div class="row"><span class="name"><span class="dot" id="midot"></span>小米</span>
+      <span id="mistate" class="v">—</span></div>
+    <div class="row"><span class="k">API</span><span class="v" id="miapi">—</span></div>
+    <div class="row"><span class="k">二维码</span><span class="v" id="miqr">—</span></div>
+    <div class="row"><span class="k">近 10 分钟事件</span><span class="v" id="mimsg">—</span></div>
+    <div class="row"><span class="k">群审计</span><span class="v" id="miaudit">—</span></div>
+    <div class="chips" id="michips"></div>
+  </div>
+
+  <div class="card">
+    <h2>扫码登录</h2>
+    <div class="qrbox"><img id="qr" alt="QR"></div>
+    <div class="sub" style="margin:8px 0 0;font-size:11.5px">
+      每 2 分钟自动换新；点下面按钮可手动拉一次
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>服务器</h2>
+    <div class="row"><span class="k">内存</span><span class="v" id="mem">—</span></div>
+    <div class="bar"><i id="membar" style="width:0"></i></div>
+    <div class="row" style="margin-top:12px"><span class="k">磁盘</span><span class="v" id="disk">—</span></div>
+    <div class="bar"><i id="diskbar" style="width:0"></i></div>
+    <div class="row" style="margin-top:12px"><span class="k">负载</span><span class="v" id="load">—</span></div>
+    <div class="row"><span class="k">运行</span><span class="v" id="uptime">—</span></div>
+  </div>
+
+  <div class="card" style="grid-column:span 2">
+    <h2>看门狗最近判定</h2>
+    <pre id="watch">—</pre>
+    <div class="err" id="err"></div>
+  </div>
+</div>
+
+<div class="btns">
+  <button class="danger" onclick="act('restart-napcat','确定重启小米？会掉线约 20 秒，登录态保留。')">重启小米</button>
+  <button class="danger" onclick="act('restart-astrbot','确定重启 AstrBot？所有插件会重载约 30 秒。')">重启 AstrBot</button>
+  <button onclick="act('watchdog','跑一次看门狗（会按判定结果告警/重启）')">跑一次看门狗</button>
+  <button onclick="act('logs-napcat','看小米最近日志')">小米日志</button>
+  <button onclick="act('logs-astrbot','看 AstrBot 最近日志')">AstrBot 日志</button>
+</div>
+<pre id="out" style="display:none"></pre>
+
+<script>
+const $ = id => document.getElementById(id);
+function setDot(el, cls){ el.className = 'dot ' + cls; }
+function ago(s){ if(s===null||s===undefined) return '—';
+  if(s<90) return s+' 秒前'; if(s<5400) return Math.round(s/60)+' 分钟前';
+  return (s/3600).toFixed(1)+' 小时前'; }
+
+async function tick(){
+  try{
+    const r = await fetch('/api/status?t='+Date.now(), {cache:'no-store'});
+    const d = await r.json();
+    if (d.err) $('err').textContent = '采集出错：' + d.err;
+    else $('err').textContent = '';
+    const s = d.data || {};
+    const mi = s.mi || {};
+
+    // 小米
+    let cls = 'off', txt = '掉线';
+    if (mi.online) { cls='on'; txt='在线'; }
+    else if ((mi.qr_age ?? 999) < 240) { cls='wait'; txt='等扫码'; }
+    setDot($('midot'), cls);
+    $('mistate').textContent = txt;
+    $('miapi').textContent = mi.api_ok ? 'OK' : '不通';
+    $('miqr').textContent = mi.qr_age==null ? '—' : ago(mi.qr_age);
+    $('mimsg').textContent = (s.msgs?.mi ?? 0) + ' 条';
+
+    // 夏07
+    const ab = s.containers?.astrbot || '';
+    const x7ok = ab.includes('Up');
+    setDot($('x7dot'), x7ok ? 'on' : 'off');
+    $('x7state').textContent = x7ok ? '运行中' : '容器未运行';
+    $('x7msg').textContent = (s.msgs?.x07 ?? 0) + ' 条';
+    $('abox').textContent = ab || '—';
+
+    // 审计
+    const a = s.audit || {};
+    const fmt = o => o ? Object.entries(o.counts||{}).slice(0,3).map(([k,v])=>k+v).join(' ') +
+                       ' · 待采纳 ' + o.pending : '—';
+    $('miaudit').textContent = fmt(a.mi);
+    $('x7audit').textContent = fmt(a.x07);
+
+    // 系统
+    if (s.mem){ $('mem').textContent = `${(s.mem.used/1024).toFixed(1)} / ${(s.mem.total/1024).toFixed(1)} G`;
+      $('membar').style.width = (s.mem.used/s.mem.total*100).toFixed(0)+'%'; }
+    if (s.disk){ $('disk').textContent = `${s.disk.used/1024|0} / ${s.disk.size/1024|0} G · ${s.disk.pct}`;
+      $('diskbar').style.width = s.disk.pct; }
+    $('load').textContent = s.load || '—';
+    $('uptime').textContent = s.uptime || '—';
+
+    $('watch').textContent = (s.watch||[]).join('\\n') || '—';
+    $('sub').textContent = '数据时间 ' + new Date(d.at*1000).toLocaleTimeString() +
+      (mi.online ? ' · 小米在线' : ' · 小米不在线');
+
+    const q = await fetch('/qr.png?t='+Date.now(), {cache:'no-store'});
+    if (q.ok){ const b = await q.blob(); const u = URL.createObjectURL(b);
+      const img = $('qr'); if (img.dataset.u) URL.revokeObjectURL(img.dataset.u);
+      img.dataset.u = u; img.src = u; }
+  }catch(e){ $('err').textContent = '页面出错：' + e; }
+  setTimeout(tick, 3000);
+}
+
+async function act(doit, why){
+  if (why && !confirm(why)) return;
+  $('out').style.display='block';
+  $('out').textContent = '执行中…';
+  try{
+    const r = await fetch('/api/action?do='+doit, {method:'POST'});
+    const j = await r.json();
+    $('out').textContent = j.out || j.err || '(无输出)';
+  }catch(e){ $('out').textContent = '失败：'+e; }
+  tick();
+}
+tick();
+</script></div></body></html>"""
+
+
+class H(BaseHTTPRequestHandler):
+    def _send(self, code, ctype, body):
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self):  # noqa: N802
+        path = self.path.split("?")[0]
+        if path == "/api/status":
+            with LOCK:
+                body = json.dumps({"data": STATE["data"], "err": STATE["err"],
+                                   "at": STATE["at"] or time.time()},
+                                  ensure_ascii=False).encode()
+            self._send(200, "application/json", body)
+        elif path == "/qr.png":
+            with LOCK:
+                png = STATE["qr"]
+            if png:
+                self._send(200, "image/png", png)
+            else:
+                self._send(503, "text/plain", b"no qr")
+        else:
+            self._send(200, "text/html; charset=utf-8", PAGE.encode())
+
+    def do_POST(self):  # noqa: N802
+        path = self.path.split("?")[0]
+        if path != "/api/action":
+            self._send(404, "application/json", b'{"err":"not found"}')
+            return
+        qs = dict(p.split("=", 1) for p in (self.path.split("?", 1) + [""])[1].split("&") if "=" in p)
+        cmd = ACTIONS.get(qs.get("do", ""))
+        if not cmd:
+            self._send(400, "application/json", b'{"err":"unknown action"}')
+            return
+        try:
+            r = ssh(cmd, timeout=120)
+            body = json.dumps({"out": (r.stdout or "")[-4000:], "err": (r.stderr or "")[-1200:]},
+                              ensure_ascii=False).encode()
+        except Exception as e:  # noqa: BLE001
+            body = json.dumps({"err": str(e)[:400]}, ensure_ascii=False).encode()
+        self._send(200, "application/json", body)
+
+    def log_message(self, *a):
+        pass
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--port", type=int, default=int(os.environ.get("BOTMON_PORT", "8791")))
+    args = ap.parse_args()
+    threading.Thread(target=poll_loop, daemon=True).start()
+    print("http://127.0.0.1:%d" % args.port, flush=True)
+    ThreadingHTTPServer(("127.0.0.1", args.port), H).serve_forever()
+
+
+if __name__ == "__main__":
+    main()

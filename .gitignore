@@ -1,0 +1,21 @@
+﻿# 绝对不能进仓库的东西
+config.json
+*.key
+*.pem
+id_ed25519*
+cmd_config.json
+onebot11_*.json
+.env
+
+# 构建产物
+dist/
+build/
+*.spec
+__pycache__/
+*.pyc
+*.log
+
+# 本地数据
+backups/
+*.db
+*.sqlite
