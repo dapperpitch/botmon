@@ -13,9 +13,25 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-KEY = os.environ.get("BOTMON_KEY", r"C:\Users\76133\.ssh\aliyun-deploy\id_ed25519.pem")
-HOST = os.environ.get("BOTMON_HOST", "root@120.26.173.179")
-REMOTE_PROBE = "/opt/botmon/probe.py"
+CFG_PATH = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")),
+                        "BotMonitor", "config.json")
+
+
+def _cfg():
+    """配置只从本机文件/环境变量读，仓库里不出现服务器地址和私钥路径。"""
+    d = {}
+    try:
+        with open(CFG_PATH, encoding="utf-8") as f:
+            d = json.load(f)
+    except Exception:
+        pass
+    return d
+
+
+_C = _cfg()
+KEY = os.environ.get("BOTMON_KEY") or _C.get("ssh_key", "")
+HOST = os.environ.get("BOTMON_HOST") or _C.get("ssh_host", "")
+REMOTE_PROBE = _C.get("remote_probe", "/opt/botmon/probe.py")
 
 STATE = {"data": {}, "qr": b"", "err": "", "at": 0.0}
 LOCK = threading.Lock()
