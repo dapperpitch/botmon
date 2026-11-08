@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """在 ECS 上跑，输出一份状态 JSON 给本地面板用。只读，不改任何东西。"""
 import json
+import glob
 import subprocess
 import time
 
-NAPCAT_CFG = "/opt/napcat/onebot11_1182409706.json"
+NAPCAT_CFG_GLOB = "/opt/napcat/onebot11_*.json"   # 别写死 QQ 号
 
 
 def sh(cmd, timeout=8):
@@ -26,7 +27,8 @@ for line in ps.splitlines():
 
 tok = ""
 try:
-    cfg = json.load(open(NAPCAT_CFG, encoding="utf-8"))
+    _path = sorted(glob.glob(NAPCAT_CFG_GLOB))[0]
+    cfg = json.load(open(_path, encoding="utf-8"))
     tok = cfg["network"]["httpServers"][0]["token"]
 except Exception:
     pass
