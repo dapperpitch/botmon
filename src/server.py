@@ -13,6 +13,11 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+try:
+    import updater
+except Exception:  # 单文件运行时可能没有同目录模块
+    updater = None
+
 CFG_PATH = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")),
                         "BotMonitor", "config.json")
 
@@ -104,7 +109,18 @@ PAGE = """<!doctype html><html lang="zh"><head><meta charset="utf-8">
  *{box-sizing:border-box}
  body{margin:0;background:var(--bg);color:var(--txt);
       font:14px/1.5 system-ui,"Segoe UI","Microsoft YaHei",sans-serif}
- .wrap{max-width:1080px;margin:0 auto;padding:22px 20px 40px}
+ .wrap{max-width:1080px;margin:0 auto;padding:22px 20px 40px;padding-left:88px}
+ .rail{position:fixed;left:0;top:0;bottom:0;width:68px;background:#0e1219;
+       border-right:1px solid var(--line);display:flex;flex-direction:column;
+       align-items:center;justify-content:space-between;padding:16px 0 14px}
+ .rbtns{display:flex;flex-direction:column;gap:8px}
+ .rbtn{width:42px;height:42px;border-radius:12px;background:transparent;border:1px solid transparent;
+       color:var(--dim);font-size:17px;cursor:pointer}
+ .rbtn:hover{background:#1a2130;color:var(--txt)}
+ .rbtn.on{background:#1f2a3d;border-color:#2f4467;color:#8ab4ff}
+ .rver{font-size:10.5px;color:#5d6879;writing-mode:horizontal-tb}
+ .view{display:none}
+ .view.on{display:block}
  h1{font-size:17px;font-weight:600;margin:0 0 4px}
  .sub{color:var(--dim);font-size:12px;margin-bottom:18px}
  .grid{display:grid;grid-template-columns:1fr 1fr 300px;gap:14px}
@@ -139,7 +155,16 @@ PAGE = """<!doctype html><html lang="zh"><head><meta charset="utf-8">
  .chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
  .chip{background:#1b2230;border:1px solid var(--line);border-radius:999px;
        padding:2px 9px;font-size:11.5px;color:#b9c4d4}
-</style></head><body><div class="wrap">
+</style></head><body><div class="rail">
+  <div class="rbtns">
+    <button class="rbtn on" data-p="status" title="状态">▦</button>
+    <button class="rbtn" data-p="audit" title="审计">◉</button>
+    <button class="rbtn" data-p="settings" title="设置">⚙</button>
+  </div>
+  <div class="rver" id="rver">v—</div>
+</div>
+<div class="wrap">
+<div class="view on" id="view-status">
 <h1>夏07 / 小米 监测台</h1>
 <div class="sub" id="sub">连接中…</div>
 
@@ -189,6 +214,12 @@ PAGE = """<!doctype html><html lang="zh"><head><meta charset="utf-8">
     <div class="err" id="err"></div>
   </div>
 </div>
+
+</div>
+
+<div class="view" id="view-audit"><h1>审计</h1><div class="card"><h2>小米 · 群聊自检</h2><div id="aud-more" class="sub"></div></div></div>
+
+<div class="view" id="view-settings"><h1>设置</h1><div class="card" style="max-width:520px"><h2>版本</h2><div class="row"><span class="k">当前版本</span><span class="v" id="set-ver">—</span></div><div class="row"><span class="k">最新版本</span><span class="v" id="set-remote">—</span></div><div class="btns"><button onclick="checkUpdate()">检查更新</button><button onclick="openRepo()">打开仓库</button></div><pre id="set-notes" style="display:none"></pre></div></div>
 
 <div class="btns">
   <button class="danger" onclick="act('restart-napcat','确定重启小米？会掉线约 20 秒，登录态保留。')">重启小米</button>
@@ -260,6 +291,38 @@ async function tick(){
   setTimeout(tick, 3000);
 }
 
+document.querySelectorAll('.rbtn').forEach(b=>{
+  b.onclick = () => {
+    document.querySelectorAll('.rbtn').forEach(x=>x.classList.remove('on'));
+    b.classList.add('on');
+    document.querySelectorAll('.view').forEach(v=>v.classList.remove('on'));
+    const el = document.getElementById('view-' + b.dataset.p);
+    if (el) el.classList.add('on');
+  };
+});
+
+async function loadVersion(){
+  try{
+    const d = await (await fetch('/api/version',{cache:'no-store'})).json();
+    document.getElementById('rver').textContent = 'v' + d.version;
+    document.getElementById('set-ver').textContent = 'v' + d.version;
+  }catch(e){}
+}
+
+async function checkUpdate(){
+  const n = document.getElementById('set-notes');
+  document.getElementById('set-remote').textContent = '检查中…';
+  try{
+    const d = await (await fetch('/api/check-update',{cache:'no-store'})).json();
+    if (d.err){ document.getElementById('set-remote').textContent = d.err; n.style.display='none'; return; }
+    document.getElementById('set-remote').textContent = d.newer ? ('v' + d.remote + '（有新版）') : ('v' + d.remote + '（已是最新）');
+    n.style.display = d.notes ? 'block' : 'none';
+    n.textContent = d.notes || '';
+  }catch(e){ document.getElementById('set-remote').textContent = '检查失败'; }
+}
+
+function openRepo(){ window.open('https://github.com/lavie0421/botmon', '_blank'); }
+
 async function act(doit, why){
   if (why && !confirm(why)) return;
   $('out').style.display='block';
@@ -271,6 +334,7 @@ async function act(doit, why){
   }catch(e){ $('out').textContent = '失败：'+e; }
   tick();
 }
+loadVersion();
 tick();
 </script></div></body></html>"""
 
@@ -291,6 +355,14 @@ class H(BaseHTTPRequestHandler):
                 body = json.dumps({"data": STATE["data"], "err": STATE["err"],
                                    "at": STATE["at"] or time.time()},
                                   ensure_ascii=False).encode()
+            self._send(200, "application/json", body)
+        elif path == "/api/version":
+            v = updater.local_version() if updater else "0.0.0"
+            body = json.dumps({"version": v}, ensure_ascii=False).encode()
+            self._send(200, "application/json", body)
+        elif path == "/api/check-update":
+            body = json.dumps(updater.check() if updater else {"err": "updater 未加载"},
+                              ensure_ascii=False).encode()
             self._send(200, "application/json", body)
         elif path == "/qr.png":
             with LOCK:
