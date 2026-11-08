@@ -5,13 +5,24 @@
 """
 import json
 import os
+import sys
 import urllib.request
 
 OWNER = "lavie0421"
 REPO = "botmon"
 API = "https://api.github.com/repos/%s/%s/releases/latest" % (OWNER, REPO)
 
-VERSION_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "VERSION")
+def _ver_path() -> str:
+    """打包后 VERSION 在 _MEIPASS 里，开发态在 src/../VERSION。"""
+    base = getattr(sys, "_MEIPASS", None)
+    if base:
+        p = os.path.join(base, "VERSION")
+        if os.path.exists(p):
+            return p
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "VERSION")
+
+
+VERSION_FILE = _ver_path()
 
 
 def local_version() -> str:
