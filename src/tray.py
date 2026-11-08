@@ -177,7 +177,7 @@ def watcher():
 
 def main():
     global ICON
-    threading.Thread(target=botmon.poll_loop, kwargs={"interval": 5.0}, daemon=True).start()
+    threading.Thread(target=botmon.stream_loop, daemon=True).start()
     threading.Thread(target=lambda: botmon.ThreadingHTTPServer(
         ("127.0.0.1", PORT), botmon.H).serve_forever(), daemon=True).start()
     time.sleep(1.0)

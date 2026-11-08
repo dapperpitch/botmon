@@ -1,17 +1,22 @@
 #!/usr/bin/env python3
-"""在 ECS 上跑，输出一份状态 JSON 给本地面板用。只读，不改任何东西。"""
-import json
+"""在 ECS 上跑，输出一行 JSON。只读。
+
+配合本地那条**常驻 ssh** 使用（while true 循环），
+这样无论开几个客户端，也只消耗一个 sshd 连接——
+2026-11-09 用 5 秒一次新建连接把 sshd 打到 banner 超时，就是这个教训。
+"""
+import base64
 import glob
+import json
+import os
 import subprocess
 import time
-
-NAPCAT_CFG_GLOB = "/opt/napcat/onebot11_*.json"   # 别写死 QQ 号
 
 
 def sh(cmd, timeout=8):
     try:
-        r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout)
-        return (r.stdout or "").strip()
+        r = subprocess.run(cmd, shell=True, capture_output=True, timeout=timeout)
+        return (r.stdout or b"").decode("utf-8", "replace").strip()
     except Exception:
         return ""
 
@@ -27,7 +32,7 @@ for line in ps.splitlines():
 
 tok = ""
 try:
-    _path = sorted(glob.glob(NAPCAT_CFG_GLOB))[0]
+    _path = sorted(glob.glob("/opt/napcat/onebot11_*.json"))[0]
     cfg = json.load(open(_path, encoding="utf-8"))
     tok = cfg["network"]["httpServers"][0]["token"]
 except Exception:
@@ -47,9 +52,18 @@ if tok:
         mi["nickname"] = (json.loads(raw2).get("data") or {}).get("nickname", "")
     except Exception:
         pass
-    st = sh("docker exec napcat stat -c %Y /app/napcat/cache/qrcode.png")
-    if st.isdigit():
-        mi["qr_age"] = int(time.time()) - int(st)
+st = sh("docker exec napcat stat -c %Y /app/napcat/cache/qrcode.png")
+if st.isdigit():
+    mi["qr_age"] = int(time.time()) - int(st)
+
+# 二维码直接放进同一个 JSON，省一次往返
+try:
+    qr = subprocess.run(["docker", "exec", "napcat", "base64", "-w0",
+                         "/app/napcat/cache/qrcode.png"],
+                        capture_output=True, timeout=10).stdout
+    mi["qr_b64"] = qr.decode("ascii", "ignore").strip() if qr else ""
+except Exception:
+    mi["qr_b64"] = ""
 out["mi"] = mi
 
 mem = sh("free -m | sed -n 2p").split()
@@ -69,17 +83,13 @@ out["msgs"] = {"mi": int(n) if n.isdigit() else 0,
 
 out["watch"] = sh("tail -6 /var/log/napcat-watch.log").splitlines()
 out["audit"] = {}
-try:
-    p = json.load(open("/opt/astrbot/data/mi_audit/patches.json", encoding="utf-8"))
-    out["audit"]["mi"] = {"counts": {k: v.get("n") for k, v in (p.get("counts") or {}).items()},
-                          "pending": len(p.get("pending") or [])}
-except Exception:
-    pass
-try:
-    p = json.load(open("/opt/astrbot/data/xia07_audit/patches.json", encoding="utf-8"))
-    out["audit"]["x07"] = {"counts": {k: v.get("n") for k, v in (p.get("counts") or {}).items()},
-                           "pending": len(p.get("pending") or [])}
-except Exception:
-    pass
+for key, path in (("mi", "/opt/astrbot/data/mi_audit/patches.json"),
+                  ("x07", "/opt/astrbot/data/xia07_audit/patches.json")):
+    try:
+        p = json.load(open(path, encoding="utf-8"))
+        out["audit"][key] = {"counts": {k: v.get("n") for k, v in (p.get("counts") or {}).items()},
+                             "pending": len(p.get("pending") or [])}
+    except Exception:
+        pass
 
-print(json.dumps(out, ensure_ascii=False))
+print(json.dumps(out, ensure_ascii=False), flush=True)

@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """双 Bot 监测台 —— 本地跑，通过 SSH 读服务器状态。
 
 用法： python tools/botmon/server.py  [--port 8791]
@@ -65,17 +65,43 @@ def ssh(cmd, timeout=40):
         timeout=timeout, creationflags=_CREATE_NO_WINDOW, startupinfo=_hidden_si())
 
 
-def poll_loop(interval=5.0):
+STREAM_CMD = (
+    "while true; do python3 %s; sleep 15; done"
+)
+
+
+def stream_loop():
+    """一条长连接流式取数据。
+
+    2026-11-09 的教训：每 5 秒新建一次 ssh 握手，一个多小时后 sshd 直接
+    banner exchange 超时（MaxStartups 打满）。改成常驻连接后，无论开几个客户端
+    都只占一个 sshd 会话。
+    """
     while True:
         try:
-            r = ssh("python3 %s" % REMOTE_PROBE)
-            if r.returncode == 0 and r.stdout.strip():
-                data = json.loads(r.stdout)
-                qr = ssh("docker exec napcat sh -c 'base64 -w0 /app/napcat/cache/qrcode.png'")
+            proc = subprocess.Popen(
+                ["ssh", "-i", KEY, "-o", "StrictHostKeyChecking=no",
+                 "-o", "ConnectTimeout=12", "-o", "BatchMode=yes",
+                 "-o", "ServerAliveInterval=20", "-o", "ServerAliveCountMax=3",
+                 HOST, STREAM_CMD % REMOTE_PROBE],
+                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                text=True, encoding="utf-8", errors="replace",
+                bufsize=1,
+                creationflags=_CREATE_NO_WINDOW)
+            for line in proc.stdout:
+                line = (line or "").strip()
+                if not line.startswith("{"):
+                    continue
+                try:
+                    data = json.loads(line)
+                except Exception:
+                    continue
+                mi = data.get("mi") or {}
+                b64 = mi.pop("qr_b64", "") or ""
                 png = b""
-                if qr.returncode == 0 and qr.stdout.strip():
+                if b64:
                     try:
-                        png = base64.b64decode(qr.stdout.strip())
+                        png = base64.b64decode(b64)
                     except Exception:
                         png = b""
                 with LOCK:
@@ -84,13 +110,14 @@ def poll_loop(interval=5.0):
                     STATE["err"] = ""
                     if png:
                         STATE["qr"] = png
-            else:
-                with LOCK:
-                    STATE["err"] = (r.stderr or "probe 失败")[-300:]
+            try:
+                proc.wait(timeout=5)
+            except Exception:
+                proc.kill()
         except Exception as e:  # noqa: BLE001
             with LOCK:
                 STATE["err"] = str(e)[:300]
-        time.sleep(interval)
+        time.sleep(5)
 
 
 ACTIONS = {
@@ -400,7 +427,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=int(os.environ.get("BOTMON_PORT", "8791")))
     args = ap.parse_args()
-    threading.Thread(target=poll_loop, daemon=True).start()
+    threading.Thread(target=stream_loop, daemon=True).start()
     print("http://127.0.0.1:%d" % args.port, flush=True)
     ThreadingHTTPServer(("127.0.0.1", args.port), H).serve_forever()
 
