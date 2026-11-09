@@ -14,6 +14,11 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 try:
+    import starmap
+except Exception:
+    starmap = None
+
+try:
     import updater
 except Exception:  # 单文件运行时可能没有同目录模块
     updater = None
@@ -37,6 +42,8 @@ _C = _cfg()
 KEY = os.environ.get("BOTMON_KEY") or _C.get("ssh_key", "")
 HOST = os.environ.get("BOTMON_HOST") or _C.get("ssh_host", "")
 REMOTE_PROBE = _C.get("remote_probe", "/opt/botmon/probe.py")
+KB_PATH = _C.get("kb_path", os.path.join(os.path.expanduser("~"), "OneDrive", "文档",
+                                        "deepseek-harness", "default-workspace", "运维知识库.md"))
 
 STATE = {"data": {}, "qr": b"", "err": "", "at": 0.0}
 LOCK = threading.Lock()
@@ -186,6 +193,7 @@ PAGE = """<!doctype html><html lang="zh"><head><meta charset="utf-8">
   <div class="rbtns">
     <button class="rbtn on" data-p="status" title="状态">▦</button>
     <button class="rbtn" data-p="audit" title="审计">◉</button>
+    <button class="rbtn" data-p="starmap" title="星图">✦</button>
     <button class="rbtn" data-p="settings" title="设置">⚙</button>
   </div>
   <div class="rver" id="rver">v—</div>
@@ -242,6 +250,19 @@ PAGE = """<!doctype html><html lang="zh"><head><meta charset="utf-8">
   </div>
 </div>
 
+</div>
+
+<div class="view" id="view-starmap">
+<h1>知识星图</h1>
+<div class="sub" id="smstat">加载中…</div>
+<div style="display:flex;gap:14px;align-items:flex-start">
+  <canvas id="smcanvas" width="900" height="620"
+          style="background:#0e1219;border:1px solid var(--line);border-radius:14px;flex:1;cursor:grab"></canvas>
+  <div class="card" style="width:300px;min-height:200px">
+    <h2>选中</h2>
+    <div id="smdetail" class="sub" style="font-size:12.5px;line-height:1.7">点一个点看看</div>
+  </div>
+</div>
 </div>
 
 <div class="view" id="view-audit"><h1>审计</h1><div class="card"><h2>小米 · 群聊自检</h2><div id="aud-more" class="sub"></div></div></div>
@@ -324,6 +345,7 @@ document.querySelectorAll('.rbtn').forEach(b=>{
     b.classList.add('on');
     document.querySelectorAll('.view').forEach(v=>v.classList.remove('on'));
     const el = document.getElementById('view-' + b.dataset.p);
+    if (b.dataset.p === 'starmap' && !SM.nodes.length) loadStar();
     if (el) el.classList.add('on');
   };
 });
@@ -350,6 +372,120 @@ async function checkUpdate(){
 
 function openRepo(){ window.open('https://github.com/lavie0421/botmon', '_blank'); }
 
+let SM = {nodes:[], edges:[], pos:{}};
+let smView = {x:0, y:0, k:1, drag:false, sx:0, sy:0};
+
+async function loadStar(){
+  const st = document.getElementById('smstat');
+  try{
+    const d = await (await fetch('/api/starmap',{cache:'no-store'})).json();
+    if (d.error){ st.textContent = '解析失败：' + d.error; return; }
+    SM = d;
+    layoutStar();
+    drawStar();
+    st.textContent = '案例 ' + d.stats.cases + ' · 节点 ' + d.stats.nodes +
+                     ' · 连线 ' + d.stats.edges + ' · ' + d.source;
+  }catch(e){ st.textContent = '加载失败：' + e; }
+}
+
+// 径向布局：案例排成一个大圆，章节绕着案例，条目绕着章节
+function layoutStar(){
+  const cv = document.getElementById('smcanvas');
+  const W = cv.width, H = cv.height, cx = W/2, cy = H/2;
+  const cases = SM.nodes.filter(n=>n.kind==='case');
+  const R1 = Math.min(W,H)*0.36;
+  cases.forEach((c,i)=>{
+    const a = i/cases.length*Math.PI*2;
+    const x = cx + Math.cos(a)*R1, y = cy + Math.sin(a)*R1;
+    SM.pos[c.id] = {x,y};
+    const secs = SM.nodes.filter(n=>n.kind==='section' && n.parent===c.id);
+    secs.forEach((sc,j)=>{
+      const sa = a + (j-(secs.length-1)/2)*0.30;
+      const sx = x + Math.cos(sa)*70, sy = y + Math.sin(sa)*70;
+      SM.pos[sc.id] = {x:sx,y:sy};
+      const pts = SM.nodes.filter(n=>n.kind==='point' && n.parent===sc.id);
+      pts.forEach((p,k)=>{
+        const pa = sa + (k-(pts.length-1)/2)*0.22;
+        const px = sx + Math.cos(pa)*36, py = sy + Math.sin(pa)*36;
+        SM.pos[p.id] = {x:px,y:py};
+      });
+    });
+  });
+}
+
+function drawStar(){
+  const cv = document.getElementById('smcanvas');
+  const ctx = cv.getContext('2d');
+  ctx.setTransform(1,0,0,1,0,0);
+  ctx.clearRect(0,0,cv.width,cv.height);
+  ctx.translate(smView.x, smView.y);
+  ctx.scale(smView.k, smView.k);
+
+  ctx.strokeStyle = 'rgba(120,140,180,.20)';
+  ctx.lineWidth = 0.7;
+  SM.edges.forEach(e=>{
+    const a = SM.pos[e.a], b = SM.pos[e.b];
+    if(!a||!b) return;
+    ctx.beginPath(); ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y); ctx.stroke();
+  });
+
+  SM.nodes.forEach(n=>{
+    const p = SM.pos[n.id];
+    if(!p) return;
+    const col = n.kind==='case' ? '#8ab4ff' : (n.color || '#8b95a8');
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, n.size, 0, Math.PI*2);
+    ctx.fillStyle = col;
+    ctx.shadowColor = col; ctx.shadowBlur = n.kind==='case' ? 14 : 6;
+    ctx.fill();
+    ctx.shadowBlur = 0;
+    if (n.kind === 'case'){
+      ctx.fillStyle = '#c9d6ea';
+      ctx.font = '11px system-ui';
+      ctx.textAlign = 'center';
+      ctx.fillText(n.label.slice(0,12), p.x, p.y - 15);
+    }
+  });
+}
+
+function smHit(mx, my){
+  const cv = document.getElementById('smcanvas');
+  const r = cv.getBoundingClientRect();
+  const x = (mx - r.left - smView.x)/smView.k;
+  const y = (my - r.top - smView.y)/smView.k;
+  let best = null, bd = 1e9;
+  SM.nodes.forEach(n=>{
+    const p = SM.pos[n.id]; if(!p) return;
+    const d = (p.x-x)**2 + (p.y-y)**2;
+    if (d < 220 && d < bd){ bd = d; best = n; }
+  });
+  return best;
+}
+
+function initStar(){
+  const cv = document.getElementById('smcanvas');
+  if (!cv) return;
+  cv.addEventListener('mousedown', e=>{ smView.drag=true; smView.sx=e.clientX-smView.x; smView.sy=e.clientY-smView.y; });
+  cv.addEventListener('mousemove', e=>{
+    if(smView.drag){ smView.x=e.clientX-smView.sx; smView.y=e.clientY-smView.sy; drawStar(); }
+  });
+  window.addEventListener('mouseup', ()=>{ smView.drag=false; });
+  cv.addEventListener('wheel', e=>{
+    e.preventDefault();
+    smView.k = Math.max(0.4, Math.min(3, smView.k * (e.deltaY>0?0.9:1.1)));
+    drawStar();
+  }, {passive:false});
+  cv.addEventListener('click', e=>{
+    const n = smHit(e.clientX, e.clientY);
+    const el = document.getElementById('smdetail');
+    if(!n){ el.textContent = '点一个点看看'; return; }
+    el.innerHTML = '<b style="color:'+(n.kind==='case'?'#8ab4ff':(n.color||'#8b95a8'))+'">' +
+      (n.kind==='case'?'案例':'条目') + '</b><br>' +
+      (n.date? '<span style="color:#5d6879">'+n.date+'</span><br>' : '') +
+      n.label;
+  });
+};
+
 async function act(doit, why){
   if (why && !confirm(why)) return;
   $('out').style.display='block';
@@ -362,6 +498,7 @@ async function act(doit, why){
   tick();
 }
 loadVersion();
+initStar();
 tick();
 </script></div></body></html>"""
 
@@ -383,6 +520,13 @@ class H(BaseHTTPRequestHandler):
                                    "at": STATE["at"] or time.time()},
                                   ensure_ascii=False).encode()
             self._send(200, "application/json", body)
+        elif path == "/api/starmap":
+            try:
+                data = starmap.parse(KB_PATH) if starmap else {"error": "starmap 未加载"}
+            except Exception as e:
+                data = {"error": str(e)[:200]}
+            self._send(200, "application/json",
+                       json.dumps(data, ensure_ascii=False).encode())
         elif path == "/api/version":
             v = updater.local_version() if updater else "0.0.0"
             body = json.dumps({"version": v}, ensure_ascii=False).encode()
