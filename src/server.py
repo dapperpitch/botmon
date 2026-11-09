@@ -14,6 +14,11 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 try:
+    import starui
+except Exception:
+    starui = None
+
+try:
     import starmap
 except Exception:
     starmap = None
@@ -45,7 +50,7 @@ REMOTE_PROBE = _C.get("remote_probe", "/opt/botmon/probe.py")
 KB_PATH = _C.get("kb_path", os.path.join(os.path.expanduser("~"), "OneDrive", "文档",
                                         "deepseek-harness", "default-workspace", "运维知识库.md"))
 
-STATE = {"data": {}, "qr": b"", "err": "", "at": 0.0}
+STATE = {"data": {}, "qr": b"", "err": "", "at": 0.0, "client": []}
 LOCK = threading.Lock()
 
 
@@ -168,6 +173,26 @@ PAGE = """<!doctype html><html lang="zh"><head><meta charset="utf-8">
  .rbtn:hover{background:#1a2130;color:var(--txt)}
  .rbtn.on{background:#1f2a3d;border-color:#2f4467;color:#8ab4ff}
  .rver{font-size:10.5px;color:#5d6879;writing-mode:horizontal-tb}
+
+ .smbar{display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap}
+ .smsearch{position:relative;flex:1;min-width:200px}
+ .smsearch input{width:100%;background:#0e1219;border:1px solid var(--line);
+   border-radius:9px;padding:8px 11px;color:var(--txt);font-size:13px;outline:none}
+ .smsearch input:focus{border-color:#35507a}
+ .smres{display:none;position:absolute;z-index:20;left:0;right:0;top:38px;
+   background:#111722;border:1px solid var(--line);border-radius:10px;
+   max-height:280px;overflow:auto;box-shadow:0 10px 30px rgba(0,0,0,.5)}
+ .smitem{padding:7px 11px;font-size:12.5px;color:#c6d2e4;cursor:pointer;
+   border-bottom:1px solid rgba(40,52,70,.6)}
+ .smitem:hover{background:#1a2331}
+ .smwrap{display:flex;gap:12px;align-items:stretch;min-width:0}
+ .smwrap canvas{border:1px solid var(--line);border-radius:14px;flex:1;
+   min-width:0;display:block}
+ .smdetail{width:300px;flex:0 0 300px;overflow:auto;max-height:640px}
+ .smhead{font-size:12px;color:var(--dim);margin-bottom:8px}
+ .smbody{font-size:13px;line-height:1.75;color:#dbe4f2;white-space:pre-wrap}
+ .smmeta{margin-top:10px;font-size:11.5px;color:#68748a}
+ @media(max-width:1000px){.smdetail{display:none}}
  .view{display:none}
  .view.on{display:block}
  h1{font-size:17px;font-weight:600;margin:0 0 4px}
@@ -267,18 +292,7 @@ PAGE = """<!doctype html><html lang="zh"><head><meta charset="utf-8">
 
 </div>
 
-<div class="view" id="view-starmap">
-<h1>知识星图</h1>
-<div class="sub" id="smstat">加载中…</div>
-<div style="display:flex;gap:14px;align-items:flex-start">
-  <canvas id="smcanvas" width="1000" height="660"
-          style="background:#0e1219;border:1px solid var(--line);border-radius:14px;flex:1;cursor:grab"></canvas>
-  <div class="card" style="width:300px;min-height:200px">
-    <h2>选中</h2>
-    <div id="smdetail" class="sub" style="font-size:12.5px;line-height:1.7">点一个点看看</div>
-  </div>
-</div>
-</div>
+<!--STARMAP_VIEW-->
 
 <div class="view" id="view-audit"><h1>审计</h1><div class="card"><h2>小米 · 群聊自检</h2><div id="aud-more" class="sub"></div></div></div>
 
@@ -293,6 +307,40 @@ PAGE = """<!doctype html><html lang="zh"><head><meta charset="utf-8">
 </div>
 <pre id="out" style="display:none"></pre>
 
+<script>
+// ===== 启动自检：任何脚本错误都要看得见，而不是变成"连接中…" =====
+window.__bootErr = [];
+window.__firstOk = false;
+function __showBoot(msg){
+  let el = document.getElementById('booterr');
+  if (!el){
+    el = document.createElement('div');
+    el.id = 'booterr';
+    el.style.cssText = 'position:fixed;left:0;right:0;top:0;z-index:99;background:#7f1d1d;' +
+      'color:#fff;font:12px/1.5 system-ui;padding:8px 14px;white-space:pre-wrap';
+    document.body.appendChild(el);
+  }
+  el.textContent = '面板脚本异常：\n' + window.__bootErr.slice(-4).join('\n');
+  try{
+    fetch('/api/clientlog', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({msg: window.__bootErr[window.__bootErr.length-1]})});
+  }catch(e){}
+}
+window.addEventListener('error', e=>{
+  window.__bootErr.push((e.message||'error') + ' @' + (e.filename||'').split('/').pop() + ':' + e.lineno);
+  __showBoot();
+});
+window.addEventListener('unhandledrejection', e=>{
+  window.__bootErr.push('rejection: ' + (e.reason && (e.reason.message||e.reason)));
+  __showBoot();
+});
+setTimeout(()=>{
+  if (!window.__firstOk){
+    window.__bootErr.push('启动 3 秒内没拿到状态数据（可能是某个初始化函数抛错）');
+    __showBoot();
+  }
+}, 3000);
+</script>
 <script>
 const $ = id => document.getElementById(id);
 function setDot(el, cls){ el.className = 'dot ' + cls; }
@@ -343,6 +391,7 @@ async function tick(){
     $('uptime').textContent = s.uptime || '—';
 
     $('watch').textContent = (s.watch||[]).join('\\n') || '—';
+    window.__firstOk = true;
     $('sub').textContent = '数据时间 ' + new Date(d.at*1000).toLocaleTimeString() +
       (mi.online ? ' · 小米在线' : ' · 小米不在线');
 
@@ -360,7 +409,7 @@ document.querySelectorAll('.rbtn').forEach(b=>{
     b.classList.add('on');
     document.querySelectorAll('.view').forEach(v=>v.classList.remove('on'));
     const el = document.getElementById('view-' + b.dataset.p);
-    if (b.dataset.p === 'starmap' && !SM.nodes.length) loadStar();
+    if (b.dataset.p === 'starmap' && !SM.nodes.length) smLoad();
     if (el) el.classList.add('on');
   };
 });
@@ -387,367 +436,7 @@ async function checkUpdate(){
 
 function openRepo(){ window.open('https://github.com/lavie0421/botmon', '_blank'); }
 
-let SM = {nodes:[], edges:[], pos:{}};
-let smView = {x:0, y:0, k:1, rot:0, drag:false, sx:0, sy:0};
-let SM_HOVER = null;
-let SM_LAYER = null, SM_WC = {x:0,y:0}, SM_BOUNDS = null, SM_AUTO = true, SM_RAF = 0;
-
-async function loadStar(){
-  const st = document.getElementById('smstat');
-  try{
-    const d = await (await fetch('/api/starmap',{cache:'no-store'})).json();
-    if (d.error){ st.textContent = '解析失败：' + d.error; return; }
-    SM = {...d, pos:{}};
-    layoutStar();
-    drawStar();
-    st.textContent = '案例 ' + d.stats.cases + ' · 节点 ' + d.stats.nodes +
-                     ' · 连线 ' + d.stats.edges + ' · ' + d.source;
-  }catch(e){ st.textContent = '加载失败：' + e; }
-}
-
-// ── 星图：每个案例是一个星系，章节和句子是星星 ──
-const PALETTE = ['#8ab4ff','#7fe0a8','#ffd166','#ff8fab','#a78bfa','#67e8f9',
-                 '#fca5a5','#c4b5fd','#86efac','#fcd34d','#f9a8d4','#93c5fd',
-                 '#6ee7b7','#fbbf24','#e879f9','#5eead4','#fda4af'];
-
-function layoutStar(){
-  const cv = document.getElementById('smcanvas');
-  const W = cv.width, H = cv.height;
-  const N = SM.nodes, P = SM.pos = {};
-
-  SM.hue = SM.hue || {};
-  const cases = N.filter(n=>n.kind==='case');
-  const clusterOf = {}, clusters = [];
-  cases.forEach((c,i)=>{
-    clusters.push({id:c.id, x:0, y:0, r:0, sx:1, sy:1, rot:0,
-                   color: PALETTE[i % PALETTE.length], members: []});
-    clusterOf[c.id] = i;
-  });
-
-  const parentOf = {};
-  N.forEach(n=>{ if(n.parent) parentOf[n.id] = n.parent; });
-  function rootOf(id){
-    let cur = id, guard = 0;
-    while (parentOf[cur] && guard++ < 6) cur = parentOf[cur];
-    return cur;
-  }
-  N.forEach(n=>{
-    if (n.kind === 'case') return;
-    const idx = clusterOf[rootOf(n.id)];
-    if (idx !== undefined) clusters[idx].members.push(n.id);
-  });
-
-  // ① 星系中心：随机撒，再互相推开，避免排成一个规整的圆
-  clusters.forEach(g=>{
-    g.x = W*0.15 + Math.random()*W*0.70;
-    g.y = H*0.15 + Math.random()*H*0.70;
-  });
-  for (let it=0; it<160; it++){
-    for (let i=0;i<clusters.length;i++){
-      for (let j=i+1;j<clusters.length;j++){
-        const a = clusters[i], b = clusters[j];
-        let dx=b.x-a.x, dy=b.y-a.y, d=Math.hypot(dx,dy)||1;
-        const min = 210;
-        if (d < min){
-          const f=(min-d)/d*0.5;
-          a.x-=dx*f; a.y-=dy*f; b.x+=dx*f; b.y+=dy*f;
-        }
-      }
-    }
-  }
-  // 收回到画布内
-  clusters.forEach(g=>{
-    g.x = Math.max(W*0.10, Math.min(W*0.90, g.x));
-    g.y = Math.max(H*0.12, Math.min(H*0.88, g.y));
-  });
-
-  // ② 星系形状：大小按星数，椭圆 + 随机旋角，成员按幂分布往中心堆
-  clusters.forEach(g=>{
-    const n = g.members.length || 1;
-    g.r = 34 + Math.sqrt(n) * 11;
-    g.sx = 0.75 + Math.random()*0.9;
-    g.sy = 0.55 + Math.random()*0.8;
-    g.rot = Math.random()*Math.PI;
-    SM.hue[g.id] = g.color;
-
-    g.members.forEach((id, k)=>{
-      const t = (k + Math.random()) / n;
-      const rr = g.r * Math.pow(Math.random(), 0.55) * (0.35 + t*0.9);
-      const ang = Math.random()*Math.PI*2;
-      const ex = Math.cos(ang)*rr*g.sx, ey = Math.sin(ang)*rr*g.sy;
-      const x = ex*Math.cos(g.rot) - ey*Math.sin(g.rot);
-      const y = ex*Math.sin(g.rot) + ey*Math.cos(g.rot);
-      P[id] = {x: g.x + x, y: g.y + y};
-    });
-
-    const cn = N.find(x=>x.id===g.id);
-    if (cn) P[g.id] = {x: g.x, y: g.y};
-  });
-
-  SM.clusters = clusters;
-  fitView();
-}
-
-function fitView(){
-  let minx=1e9,miny=1e9,maxx=-1e9,maxy=-1e9;
-  Object.values(SM.pos).forEach(p=>{
-    if(p.x<minx)minx=p.x; if(p.x>maxx)maxx=p.x;
-    if(p.y<miny)miny=p.y; if(p.y>maxy)maxy=p.y;
-  });
-  SM_BOUNDS = {minx, miny, maxx, maxy, w: maxx-minx, h: maxy-miny};
-  SM_WC = {x:(minx+maxx)/2, y:(miny+maxy)/2};
-
-  const cv = document.getElementById('smcanvas');
-  const pad = 70;
-  const k = Math.min((cv.width-pad*2)/(SM_BOUNDS.w||1),
-                     (cv.height-pad*2)/(SM_BOUNDS.h||1));
-  smView.k = Math.max(0.3, Math.min(2.2, k));
-  smView.x = cv.width/2;
-  smView.y = cv.height/2;
-  smView.rot = 0;
-  SM_LAYER = null;     // 布局变了，静态层要重画
-}
-
-// 把星星和连线画到一张离屏画布上，之后只做旋转贴图（不然每帧 400 个渐变会卡）
-function buildLayer(){
-  const cv = document.getElementById('smcanvas');
-  const pad = 120;
-  const bw = Math.ceil(SM_BOUNDS.w + pad*2);
-  const bh = Math.ceil(SM_BOUNDS.h + pad*2);
-  const c = document.createElement('canvas');
-  c.width = bw; c.height = bh;
-  const g = c.getContext('2d');
-  g.translate(-SM_BOUNDS.minx + pad, -SM_BOUNDS.miny + pad);
-
-  // 连线
-  g.globalCompositeOperation = 'lighter';
-  SM.edges.forEach(e=>{
-    const a = SM.pos[e.a], b = SM.pos[e.b];
-    if(!a||!b) return;
-    g.strokeStyle = 'rgba(140,170,220,.10)';
-    g.lineWidth = 0.6;
-    g.beginPath(); g.moveTo(a.x,a.y); g.lineTo(b.x,b.y); g.stroke();
-  });
-  g.globalCompositeOperation = 'source-over';
-
-  // 星星
-  const order = [...SM.nodes].sort((p,q)=>p.size-q.size);
-  order.forEach(n=>{
-    const p = SM.pos[n.id];
-    if(!p) return;
-    const col = n.kind==='case' ? '#ffffff' : (SM.hue[rootCase(n.id)] || n.color || '#9fb3d1');
-    const base = n.kind==='case' ? 5.5 : (n.kind==='section' ? 3.2 : 1.7);
-    const glow = base*4;
-    const grd = g.createRadialGradient(p.x, p.y, 0, p.x, p.y, glow);
-    grd.addColorStop(0, hexA(col, 0.9));
-    grd.addColorStop(0.22, hexA(col, 0.35));
-    grd.addColorStop(1, hexA(col, 0));
-    g.fillStyle = grd;
-    g.beginPath(); g.arc(p.x, p.y, glow, 0, Math.PI*2); g.fill();
-    g.fillStyle = hexA('#ffffff', n.kind==='point' ? 0.5 : 0.9);
-    g.beginPath(); g.arc(p.x, p.y, Math.max(0.7, base*0.32), 0, Math.PI*2); g.fill();
-  });
-
-  // 星系名（跟着转，所以画在层里）
-  g.textAlign = 'center';
-  (SM.clusters||[]).forEach(cl=>{
-    const node = SM.nodes.find(n=>n.id===cl.id);
-    if(!node) return;
-    g.fillStyle = hexA(cl.color, 0.9);
-    g.font = '600 10.5px system-ui';
-    g.fillText(node.label.slice(0,14), cl.x, cl.y - 14);
-  });
-
-  SM_LAYER = {canvas: c, ox: -SM_BOUNDS.minx + pad, oy: -SM_BOUNDS.miny + pad};
-}
-
-function drawStar(){
-  const cv = document.getElementById('smcanvas');
-  const ctx = cv.getContext('2d');
-  ctx.setTransform(1,0,0,1,0,0);
-
-  ensureBg(cv);
-  ctx.drawImage(SM_BG, 0, 0);
-
-  if (!SM_LAYER) buildLayer();
-
-  ctx.save();
-  ctx.translate(smView.x, smView.y);
-  ctx.scale(smView.k, smView.k);
-  ctx.rotate(smView.rot);
-  ctx.translate(-SM_WC.x, -SM_WC.y);
-
-  ctx.globalCompositeOperation = 'lighter';
-  ctx.drawImage(SM_LAYER.canvas, SM_BOUNDS.minx - 120, SM_BOUNDS.miny - 120);
-  ctx.globalCompositeOperation = 'source-over';
-  ctx.restore();
-
-  // 悬停高亮（在变换空间里画一个亮点）
-  if (SM_HOVER && SM.pos[SM_HOVER.id]){
-    const p = SM.pos[SM_HOVER.id];
-    ctx.save();
-    ctx.translate(smView.x, smView.y);
-    ctx.scale(smView.k, smView.k);
-    ctx.rotate(smView.rot);
-    ctx.translate(-SM_WC.x, -SM_WC.y);
-    const col = SM.hue[rootCase(SM_HOVER.id)] || '#ffffff';
-    const grd = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, 26);
-    grd.addColorStop(0, hexA(col, 0.95));
-    grd.addColorStop(1, hexA(col, 0));
-    ctx.fillStyle = grd;
-    ctx.beginPath(); ctx.arc(p.x, p.y, 26, 0, Math.PI*2); ctx.fill();
-    ctx.restore();
-  }
-}
-
-function rootCase(id){
-  let cur = id, guard = 0;
-  while (guard++ < 6){
-    const n = SM.nodes.find(x=>x.id===cur);
-    if (!n || !n.parent) return cur;
-    cur = n.parent;
-  }
-  return cur;
-}
-
-function hexA(hex, a){
-  if (!hex || hex[0] !== '#') return 'rgba(150,170,200,'+a+')';
-  const r = parseInt(hex.slice(1,3),16), g = parseInt(hex.slice(3,5),16), b = parseInt(hex.slice(5,7),16);
-  return 'rgba('+r+','+g+','+b+','+a+')';
-}
-
-let SM_BG = null, SM_BG_KEY = '';
-
-function ensureBg(cv){
-  const key = cv.width + 'x' + cv.height;
-  if (SM_BG && SM_BG_KEY === key) return;
-  const c = document.createElement('canvas');
-  c.width = cv.width; c.height = cv.height;
-  const g = c.getContext('2d');
-  const W = c.width, H = c.height;
-
-  const base = g.createRadialGradient(W*0.5, H*0.5, 30, W*0.5, H*0.5, Math.max(W,H)*0.78);
-  base.addColorStop(0,   '#121a30');
-  base.addColorStop(0.45,'#0a1020');
-  base.addColorStop(1,   '#03050a');
-  g.fillStyle = base;
-  g.fillRect(0,0,W,H);
-
-  g.globalCompositeOperation = 'lighter';
-  const clouds = [
-    [W*0.22, H*0.30, Math.max(W,H)*0.42, '90,70,190'],
-    [W*0.78, H*0.24, Math.max(W,H)*0.36, '40,130,180'],
-    [W*0.62, H*0.78, Math.max(W,H)*0.40, '180,60,140'],
-    [W*0.30, H*0.80, Math.max(W,H)*0.34, '50,160,140'],
-  ];
-  clouds.forEach(([x,y,r,rgb])=>{
-    const cg = g.createRadialGradient(x, y, 0, x, y, r);
-    cg.addColorStop(0,   'rgba('+rgb+',0.16)');
-    cg.addColorStop(0.55,'rgba('+rgb+',0.05)');
-    cg.addColorStop(1,   'rgba('+rgb+',0)');
-    g.fillStyle = cg;
-    g.beginPath(); g.arc(x, y, r, 0, Math.PI*2); g.fill();
-  });
-
-  for (let i=0; i<520; i++){
-    const x = Math.random()*W, y = Math.random()*H;
-    const r = Math.random()*1.1 + 0.15;
-    const a = Math.random()*0.55 + 0.08;
-    g.fillStyle = 'rgba(255,255,255,' + a.toFixed(2) + ')';
-    g.beginPath(); g.arc(x, y, r, 0, Math.PI*2); g.fill();
-    if (Math.random() < 0.02){
-      g.strokeStyle = 'rgba(200,220,255,' + (a*0.8).toFixed(2) + ')';
-      g.lineWidth = 0.6;
-      g.beginPath();
-      g.moveTo(x-4, y); g.lineTo(x+4, y);
-      g.moveTo(x, y-4); g.lineTo(x, y+4);
-      g.stroke();
-    }
-  }
-
-  const vig = g.createRadialGradient(W/2, H/2, Math.min(W,H)*0.35, W/2, H/2, Math.max(W,H)*0.72);
-  vig.addColorStop(0, 'rgba(0,0,0,0)');
-  vig.addColorStop(1, 'rgba(0,0,0,0.62)');
-  g.globalCompositeOperation = 'source-over';
-  g.fillStyle = vig;
-  g.fillRect(0,0,W,H);
-
-  SM_BG = c; SM_BG_KEY = key;
-}
-
-function smHit(mx, my){
-  const cv = document.getElementById('smcanvas');
-  const r = cv.getBoundingClientRect();
-  const sx = mx - r.left, sy = my - r.top;
-  // 逆变换：canvas → 世界坐标
-  let dx = (sx - smView.x)/smView.k, dy = (sy - smView.y)/smView.k;
-  const c = Math.cos(-smView.rot), sn = Math.sin(-smView.rot);
-  const rx = dx*c - dy*sn, ry = dx*sn + dy*c;
-  const x = rx + SM_WC.x, y = ry + SM_WC.y;
-
-  let best = null, bd = 1e9;
-  SM.nodes.forEach(n=>{
-    const p = SM.pos[n.id]; if(!p) return;
-    const d = (p.x-x)**2 + (p.y-y)**2;
-    if (d < 400 && d < bd){ bd = d; best = n; }
-  });
-  return best;
-}
-
-function initStar(){
-  const cv = document.getElementById('smcanvas');
-  if (!cv) return;
-  cv.addEventListener('mousedown', e=>{
-    smView.drag = true;
-    smView.spin = (e.button === 2 || e.shiftKey);
-    smView.sx = e.clientX - smView.x;
-    smView.sy = e.clientY - smView.y;
-    smView.rot0 = smView.rot;
-    smView.mx0 = e.clientX;
-  });
-  cv.addEventListener('mousemove', e=>{
-    if(smView.drag){
-      if (smView.spin){ smView.rot = smView.rot0 + (e.clientX - smView.mx0) * 0.008; }
-      else { smView.x = e.clientX - smView.sx; smView.y = e.clientY - smView.sy; }
-      drawStar(); return;
-    }
-    const n = smHit(e.clientX, e.clientY);
-    const cur = SM_HOVER ? SM_HOVER.id : null;
-    SM_HOVER = n;
-    cv.style.cursor = n ? 'pointer' : 'grab';
-    cv.title = n ? n.label : '';
-    if ((n?n.id:null) !== cur) drawStar();
-  });
-  window.addEventListener('mouseup', ()=>{ smView.drag=false; });
-  cv.addEventListener('wheel', e=>{
-    e.preventDefault();
-    smView.k = Math.max(0.25, Math.min(4, smView.k * (e.deltaY>0?0.9:1.1)));
-    drawStar();
-  }, {passive:false});
-  cv.addEventListener('dblclick', ()=>{ SM_AUTO = !SM_AUTO; });
-  cv.addEventListener('contextmenu', e=>{ e.preventDefault(); SM_AUTO = !SM_AUTO; });
-  if (!SM_RAF){
-    const loop = ()=>{
-      if (SM_AUTO && !smView.drag && SM.nodes.length){
-        smView.rot += 0.0012;
-        if (smView.rot > Math.PI*2) smView.rot -= Math.PI*2;
-        drawStar();
-      }
-      SM_RAF = requestAnimationFrame(loop);
-    };
-    SM_RAF = requestAnimationFrame(loop);
-  }
-
-  cv.addEventListener('click', e=>{
-    const n = smHit(e.clientX, e.clientY);
-    const el = document.getElementById('smdetail');
-    if(!n){ el.textContent = '点一个点看看'; return; }
-    el.innerHTML = '<b style="color:'+(n.kind==='case'?'#8ab4ff':(n.color||'#8b95a8'))+'">' +
-      (n.kind==='case'?'案例':'条目') + '</b><br>' +
-      (n.date? '<span style="color:#5d6879">'+n.date+'</span><br>' : '') +
-      n.label;
-  });
-};
+//<!--STARMAP_JS-->
 
 async function act(doit, why){
   if (why && !confirm(why)) return;
@@ -761,9 +450,14 @@ async function act(doit, why){
   tick();
 }
 loadVersion();
-initStar();
+smInit();
 tick();
 </script></div></body></html>"""
+
+if starui:
+    PAGE = (PAGE.replace("<!--STARMAP_VIEW-->", starui.VIEW)
+                .replace("//<!--STARMAP_JS-->", starui.SCRIPT))
+
 
 
 class H(BaseHTTPRequestHandler):
@@ -781,6 +475,11 @@ class H(BaseHTTPRequestHandler):
             with LOCK:
                 body = json.dumps({"data": STATE["data"], "err": STATE["err"],
                                    "at": STATE["at"] or time.time()},
+                                  ensure_ascii=False).encode()
+            self._send(200, "application/json", body)
+        elif path == "/api/clientlog":
+            with LOCK:
+                body = json.dumps({"log": STATE.get("client") or []},
                                   ensure_ascii=False).encode()
             self._send(200, "application/json", body)
         elif path == "/api/starmap":
@@ -810,6 +509,22 @@ class H(BaseHTTPRequestHandler):
 
     def do_POST(self):  # noqa: N802
         path = self.path.split("?")[0]
+        if path == "/api/clientlog":
+            try:
+                n = int(self.headers.get("Content-Length") or 0)
+                raw = self.rfile.read(n) if n else b"{}"
+                d = json.loads(raw.decode("utf-8", "replace"))
+                msg = str(d.get("msg") or "")[:500]
+                if msg:
+                    with LOCK:
+                        log = STATE.setdefault("client", [])
+                        log.append({"at": time.time(), "msg": msg})
+                        del log[:-20]
+                    print("[client]", msg, flush=True)
+            except Exception:
+                pass
+            self._send(200, "application/json", b'{"ok":true}')
+            return
         if path != "/api/action":
             self._send(404, "application/json", b'{"err":"not found"}')
             return
