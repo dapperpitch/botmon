@@ -115,6 +115,7 @@ pyinstaller --onefile --windowed --name BotMonitor --icon ../assets/icon.ico ^
 
 ## 版本与更新
 
+- 仓库：<https://github.com/dapperpitch/botmon>（「设置 → 打开仓库」跳这里）
 - 版本号在 `VERSION`；「设置 → 检查更新」读 GitHub Releases 比对
 - **不自动下载替换**：更新中途断电、杀毒误报、文件占用这些没处理好之前，
   自动替换只会把软件搞坏
@@ -180,12 +181,12 @@ pyinstaller --onefile --windowed --name BotMonitor --icon ../assets/icon.ico ^
 
 ## 开发状态
 
-**v0.4.0** — 状态面板 + 托盘 + 三维银河星图 + 版本检查
+**v0.5.1** — 仓库迁到 `dapperpitch/botmon`，版本检查指向新地址
 
 - [x] v0.2 图标导航、设置页、版本检查
 - [x] v0.3 知识星图
 - [x] v0.4 三维银河（透视、景深、形态切换、加载进度）
-- [ ] v0.5 脑图（记忆 / 实体关系）
+- [x] v0.5 脑图（记忆 / 实体关系）
 - [ ] v0.6 自动更新与回滚
 - [ ] v0.7 语音试听、审计详情页
 

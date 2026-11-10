@@ -599,7 +599,7 @@ async function checkUpdate(){
   }catch(e){ document.getElementById('set-remote').textContent = '检查失败'; }
 }
 
-function openRepo(){ window.open('https://github.com/lavie0421/botmon', '_blank'); }
+function openRepo(){ window.open('https://github.com/dapperpitch/botmon', '_blank'); }
 
 //<!--STARMAP_JS-->
 

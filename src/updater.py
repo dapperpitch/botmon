@@ -8,7 +8,7 @@ import os
 import sys
 import urllib.request
 
-OWNER = "lavie0421"
+OWNER = "dapperpitch"
 REPO = "botmon"
 API = "https://api.github.com/repos/%s/%s/releases/latest" % (OWNER, REPO)
 
