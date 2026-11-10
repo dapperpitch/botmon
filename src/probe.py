@@ -1,95 +1,30 @@
 #!/usr/bin/env python3
-"""在 ECS 上跑，输出一行 JSON。只读。
-
-配合本地那条**常驻 ssh** 使用（while true 循环），
-这样无论开几个客户端，也只消耗一个 sshd 连接——
-2026-11-09 用 5 秒一次新建连接把 sshd 打到 banner 超时，就是这个教训。
-"""
-import base64
-import glob
+"""桌面端读的是服务器上的缓存文件（由 collect_loop.py 每 20 秒刷新）。"""
 import json
 import os
 import subprocess
 import time
 
+CACHE = "/tmp/botmon.json"
 
-def sh(cmd, timeout=8):
+def read():
     try:
-        r = subprocess.run(cmd, shell=True, capture_output=True, timeout=timeout)
-        return (r.stdout or b"").decode("utf-8", "replace").strip()
+        with open(CACHE, encoding="utf-8") as f:
+            d = json.load(f)
+        d["cache_age"] = int(time.time() - os.path.getmtime(CACHE))
+        return d
     except Exception:
-        return ""
+        return None
 
-
-out = {"ts": time.time()}
-
-ps = sh("docker ps --format '{{.Names}}|{{.Status}}'")
-out["containers"] = {}
-for line in ps.splitlines():
-    if "|" in line:
-        n, s = line.split("|", 1)
-        out["containers"][n] = s
-
-tok = ""
-try:
-    _path = sorted(glob.glob("/opt/napcat/onebot11_*.json"))[0]
-    cfg = json.load(open(_path, encoding="utf-8"))
-    tok = cfg["network"]["httpServers"][0]["token"]
-except Exception:
-    pass
-
-mi = {"api_ok": False, "online": False, "nickname": "", "qr_age": None}
-if tok:
-    raw = sh('docker exec napcat curl -s -m 5 "http://127.0.0.1:3000/get_status?access_token=%s"' % tok, 12)
+d = read()
+if d is None or d.get("cache_age", 999) > 90:
+    # 缓存太旧就自己跑一次（慢，但保证有数据）
     try:
-        d = json.loads(raw)
-        mi["api_ok"] = True
-        mi["online"] = bool((d.get("data") or {}).get("online"))
+        r = subprocess.run(["python3", "/opt/botmon/collect_once.py"],
+                           capture_output=True, timeout=120)
+        txt = r.stdout.decode("utf-8", "replace").strip()
+        if txt.startswith("{"):
+            d = json.loads(txt)
     except Exception:
         pass
-    raw2 = sh('docker exec napcat curl -s -m 5 "http://127.0.0.1:3000/get_login_info?access_token=%s"' % tok, 12)
-    try:
-        mi["nickname"] = (json.loads(raw2).get("data") or {}).get("nickname", "")
-    except Exception:
-        pass
-st = sh("docker exec napcat stat -c %Y /app/napcat/cache/qrcode.png")
-if st.isdigit():
-    mi["qr_age"] = int(time.time()) - int(st)
-
-# 二维码直接放进同一个 JSON，省一次往返
-try:
-    qr = subprocess.run(["docker", "exec", "napcat", "base64", "-w0",
-                         "/app/napcat/cache/qrcode.png"],
-                        capture_output=True, timeout=10).stdout
-    mi["qr_b64"] = qr.decode("ascii", "ignore").strip() if qr else ""
-except Exception:
-    mi["qr_b64"] = ""
-out["mi"] = mi
-
-mem = sh("free -m | sed -n 2p").split()
-if len(mem) >= 7:
-    out["mem"] = {"total": int(mem[1]), "used": int(mem[2]), "avail": int(mem[6])}
-df = sh("df -Pm / | tail -1").split()
-if len(df) >= 5:
-    out["disk"] = {"size": int(df[1]), "used": int(df[2]), "pct": df[4]}
-up = sh("uptime").split("load average:")
-out["load"] = up[1].strip() if len(up) > 1 else ""
-out["uptime"] = sh("uptime -p")
-
-n = sh("docker logs --since 10m astrbot 2>&1 | grep -ac 'napcat(aiocqhttp)' || true")
-x = sh("docker logs --since 10m astrbot 2>&1 | grep -ac 'qq_official' || true")
-out["msgs"] = {"mi": int(n) if n.isdigit() else 0,
-               "x07": int(x) if x.isdigit() else 0}
-
-out["watch"] = sh("tail -6 /var/log/napcat-watch.log").splitlines()
-out["audit"] = {}
-for key, path in (("mi", "/opt/astrbot/data/mi_audit/patches.json"),
-                  ("x07", "/opt/astrbot/data/xia07_audit/patches.json")):
-    try:
-        p = json.load(open(path, encoding="utf-8"))
-        out["audit"][key] = {"counts": {k: v.get("n") for k, v in (p.get("counts") or {}).items()},
-                             "pending": len(p.get("pending") or [])}
-    except Exception:
-        pass
-
-print(json.dumps(out, ensure_ascii=False), flush=True)
+print(json.dumps(d or {"err": "no data"}, ensure_ascii=False), flush=True)

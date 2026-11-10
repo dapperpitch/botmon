@@ -121,7 +121,9 @@ def open_panel(icon=None, item=None):
     if WINDOW is None:
         WINDOW = webview.create_window("夏07 / 小米 监测台", BASE,
                                        width=1120, height=820, min_size=(900, 640))
-        webview.start()          # 阻塞到窗口关闭
+        # 设了 BOTMON_DEBUG=1 就打开开发者工具（右键检查 / F12），排查页面问题用
+        _dbg = os.environ.get("BOTMON_DEBUG") == "1"
+        webview.start(debug=_dbg)   # 阻塞到窗口关闭
         WINDOW = None
     else:
         try:

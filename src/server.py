@@ -28,6 +28,36 @@ try:
 except Exception:  # 单文件运行时可能没有同目录模块
     updater = None
 
+BRAIN_PROBE = """
+<script>
+(function(){
+  function post(m){
+    try{ fetch('/api/clientlog',{method:'POST',headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({msg: ('[brain] ' + m).slice(0,480)})}); }catch(e){}
+  }
+  window.addEventListener('error', function(e){
+    post('ERROR ' + (e.message||'') + ' @ ' + (e.filename||'').split('/').pop() + ':' + e.lineno);
+  }, true);
+  window.addEventListener('unhandledrejection', function(e){
+    post('REJECT ' + ((e.reason && (e.reason.message||e.reason)) || ''));
+  });
+  setTimeout(function(){
+    var c = document.querySelector('canvas');
+    var gl = c && (c.getContext && (c.getContext('webgl2') || c.getContext('webgl')));
+    post('canvas=' + (c ? c.width + 'x' + c.height : 'none') + ' webgl=' + (gl ? 'yes' : 'no'));
+  }, 2500);
+})();
+</script>
+"""
+
+try:
+    import sys as _sys
+    _BASE = getattr(_sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+
+    BRAIN_DIR = os.path.join(_BASE, "brain")
+except Exception:
+    BRAIN_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "brain")
+
 CFG_PATH = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")),
                         "BotMonitor", "config.json")
 
@@ -83,36 +113,21 @@ STREAM_CMD = (
 
 
 def stream_loop():
-    """一条长连接流式取数据。
-
-    2026-11-09 两次 SSH 断连的教训：
-      · 客户端重连间隔固定 5 秒 = 反复握手，短时间几百次登录，
-        既像暴力破解（会被云安全中心 / 登录防护盯上），也会把自己堵死
-      · 所以这里改成指数退避，失败一次等 30 秒，最长 5 分钟，
-        并且「任何情况下都不许 30 秒内重连」
-    """
+    """每 15 秒跑一次远端探针。失败走指数退避（30s→300s），绝不低于 15s。"""
     fail = 0
     while True:
-        got_data = False
         try:
-            proc = subprocess.Popen(
-                ["ssh", "-i", KEY, "-o", "StrictHostKeyChecking=no",
-                 "-o", "ConnectTimeout=12", "-o", "BatchMode=yes",
-                 "-o", "ServerAliveInterval=20", "-o", "ServerAliveCountMax=3",
-                 HOST, STREAM_CMD % REMOTE_PROBE],
-                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                text=True, encoding="utf-8", errors="replace",
-                bufsize=1,
-                creationflags=_CREATE_NO_WINDOW)
-            for line in proc.stdout:
-                line = (line or "").strip()
-                if not line.startswith("{"):
-                    continue
-                try:
-                    data = json.loads(line)
-                except Exception:
-                    continue
-                got_data = True
+            r = ssh("python3 " + REMOTE_PROBE, timeout=45)
+            raw = r.stdout if isinstance(r.stdout, str) else ""
+            data = None
+            for line in raw.splitlines():
+                line = line.strip()
+                if line.startswith("{"):
+                    try:
+                        data = json.loads(line)
+                    except Exception:
+                        data = None
+            if data:
                 mi = data.get("mi") or {}
                 b64 = mi.pop("qr_b64", "") or ""
                 png = b""
@@ -127,24 +142,19 @@ def stream_loop():
                     STATE["err"] = ""
                     if png:
                         STATE["qr"] = png
-            try:
-                proc.wait(timeout=5)
-            except Exception:
-                proc.kill()
-        except Exception as e:  # noqa: BLE001
-            with LOCK:
-                STATE["err"] = str(e)[:300]
-
-        if got_data:
-            fail = 0
-            wait = 10
-        else:
+                fail = 0
+                time.sleep(15)
+            else:
+                fail += 1
+                with LOCK:
+                    STATE["err"] = "探针没有返回数据（%s）" % (raw[:120] or "空输出")
+                wait = min(300, 30 * (2 ** min(fail - 1, 4)))
+                time.sleep(wait)
+        except Exception as e:
             fail += 1
-            wait = min(300, 30 * (2 ** min(fail - 1, 4)))
             with LOCK:
-                if not STATE["err"]:
-                    STATE["err"] = "连接中断，%d 秒后重试（第 %d 次）" % (wait, fail)
-        time.sleep(wait)
+                STATE["err"] = ("连接异常：%s" % e)[:200]
+            time.sleep(min(300, 30 * (2 ** min(fail - 1, 4))))
 
 
 ACTIONS = {
@@ -193,6 +203,31 @@ PAGE = """<!doctype html><html lang="zh"><head><meta charset="utf-8">
  .smbody{font-size:13px;line-height:1.75;color:#dbe4f2;white-space:pre-wrap}
  .smmeta{margin-top:10px;font-size:11.5px;color:#68748a}
  @media(max-width:1000px){.smdetail{display:none}}
+ .btab{background:#151a23;border:1px solid var(--line);color:#9fb0c9;
+   padding:5px 14px;border-radius:99px;cursor:pointer;font-size:12.5px}
+ .btab.on{background:#2a3a52;border-color:#3d5675;color:#cfe0f5}
+ .bk-head{display:flex;gap:10px;margin:12px 0}
+ .bk-bot{flex:1;background:#151a23;border:1px solid var(--line);border-radius:12px;padding:12px 14px}
+ .bk-bot .bn{font-size:14px;font-weight:600;margin-bottom:6px}
+ .bk-row{display:flex;justify-content:space-between;font-size:12px;color:#8b95a8}
+ .bk-row .v{color:#d6e0ee}
+ .bk-card{background:#151a23;border:1px solid var(--line);border-radius:14px;
+   padding:14px 16px;margin-bottom:12px}
+ .bk-card h3{font-size:12px;letter-spacing:.05em;text-transform:uppercase;color:#8b95a8;margin:0 0 10px}
+ .bk-item{display:flex;gap:10px;padding:8px 0;border-bottom:1px solid rgba(35,43,56,.7)}
+ .bk-item:last-child{border-bottom:0}
+ .bk-d{width:7px;height:7px;border-radius:50%;margin-top:6px;flex:0 0 7px}
+ .bk-bad{background:#ff5c5c}.bk-warn{background:#f0b429}.bk-ok{background:#39d98a}
+ .bk-t{font-size:12.5px;color:#dce6f4}
+ .bk-m{font-size:11.5px;color:#6f7c92;margin-top:2px}
+ .bk-tag{font-size:10.5px;border:1px solid var(--line);border-radius:99px;
+   padding:1px 7px;color:#9fb0c9;margin-left:6px}
+ .bk-f{display:flex;font-size:12px;padding:4px 0;color:#c6d3e5}
+ .bk-f .k{color:#7f8ea6;width:56px;flex:0 0 56px}
+ .bk-f .v{flex:1}
+ .bk-f .c{color:#8fa2bb}
+ .bk-bar{height:7px;background:#1a2130;border-radius:4px;overflow:hidden;display:flex;margin:8px 0 6px}
+ .bk-bar i{display:block;height:100%}
  .view{display:none}
  .view.on{display:block}
  h1{font-size:17px;font-weight:600;margin:0 0 4px}
@@ -234,6 +269,7 @@ PAGE = """<!doctype html><html lang="zh"><head><meta charset="utf-8">
     <button class="rbtn on" data-p="status" title="状态">▦</button>
     <button class="rbtn" data-p="audit" title="审计">◉</button>
     <button class="rbtn" data-p="starmap" title="星图">✦</button>
+    <button class="rbtn" data-p="brain" title="脑图">◍</button>
     <button class="rbtn" data-p="settings" title="设置">⚙</button>
   </div>
   <div class="rver" id="rver">v—</div>
@@ -295,6 +331,15 @@ PAGE = """<!doctype html><html lang="zh"><head><meta charset="utf-8">
 <!--STARMAP_VIEW-->
 
 <div class="view" id="view-audit"><h1>审计</h1><div class="card"><h2>小米 · 群聊自检</h2><div id="aud-more" class="sub"></div></div></div>
+
+<div class="view" id="view-brain">
+<h1>记忆大脑</h1>
+<div class="sub" style="display:flex;gap:8px;align-items:center">
+  <button class="btab on" data-b="3d" onclick="brainTab('3d')">3D 脑图</button>
+  <button class="btab" data-b="check" onclick="brainTab('check')">体检</button>
+</div>
+<iframe id="brainframe" style="width:100%;height:calc(100vh - 250px);min-height:420px;border:1px solid var(--line);border-radius:14px;background:#05070c"></iframe>
+<div id="braincheck" style="display:none;height:calc(100vh - 250px);overflow:auto"></div>
 
 <div class="view" id="view-settings"><h1>设置</h1><div class="card" style="max-width:520px"><h2>版本</h2><div class="row"><span class="k">当前版本</span><span class="v" id="set-ver">—</span></div><div class="row"><span class="k">最新版本</span><span class="v" id="set-remote">—</span></div><div class="btns"><button onclick="checkUpdate()">检查更新</button><button onclick="openRepo()">打开仓库</button></div><pre id="set-notes" style="display:none"></pre></div></div>
 
@@ -410,9 +455,129 @@ document.querySelectorAll('.rbtn').forEach(b=>{
     document.querySelectorAll('.view').forEach(v=>v.classList.remove('on'));
     const el = document.getElementById('view-' + b.dataset.p);
     if (b.dataset.p === 'starmap' && !SM.nodes.length) smLoad();
+    if (b.dataset.p === 'brain'){
+      const f = document.getElementById('brainframe');
+      if (f && !f.src) f.src = '/astrbot-xia07/brain';
+    }
     if (el) el.classList.add('on');
   };
 });
+
+
+function brainTab(k){
+  document.querySelectorAll('.btab').forEach(function(b){ b.classList.toggle('on', b.dataset.b === k); });
+  document.getElementById('brainframe').style.display = (k === '3d') ? 'block' : 'none';
+  document.getElementById('braincheck').style.display = (k === 'check') ? 'block' : 'none';
+  if (k === '3d'){
+    var f = document.getElementById('brainframe');
+    if (!f.src) f.src = '/astrbot-xia07/brain';
+  } else {
+    brainCheck();
+  }
+}
+
+var BRAIN_CACHE = null;
+async function brainCheck(force){
+  var box = document.getElementById('braincheck');
+  if (BRAIN_CACHE && !force) return renderBrain(BRAIN_CACHE);
+  box.textContent = '正在读取两个大脑…';
+  try{
+    var d = await (await fetch('/api/brain-check', {cache:'no-store'})).json();
+    BRAIN_CACHE = d;
+    renderBrain(d);
+  }catch(e){ box.textContent = '读取失败：' + e; }
+}
+
+function renderBrain(d){
+  var box = document.getElementById('braincheck');
+  box.textContent = '';
+  var bots = (d && d.bots) || {};
+
+  var head = document.createElement('div'); head.className = 'bk-head';
+  ['xia07','mike'].forEach(function(k){
+    var b = bots[k]; if (!b) return;
+    var card = document.createElement('div'); card.className = 'bk-bot';
+    var nm = document.createElement('div'); nm.className = 'bn'; nm.textContent = b.label || k;
+    card.appendChild(nm);
+    [['记忆', b.mem_total + ' 条'], ['实体', b.ent_total + ' 个'], ['事实卡片', b.facts_count + ' 张']]
+      .forEach(function(pair){
+        var r = document.createElement('div'); r.className = 'bk-row';
+        var a = document.createElement('span'); a.textContent = pair[0];
+        var v = document.createElement('span'); v.className = 'v'; v.textContent = pair[1];
+        r.appendChild(a); r.appendChild(v); card.appendChild(r);
+      });
+    head.appendChild(card);
+  });
+  box.appendChild(head);
+
+  ['xia07','mike'].forEach(function(k){
+    var b = bots[k]; if (!b) return;
+    var card = document.createElement('div'); card.className = 'bk-card';
+    var h = document.createElement('h3'); h.textContent = (b.label||k) + ' · 需要看的 ' + (b.issues||[]).length + ' 件事';
+    card.appendChild(h);
+    (b.issues||[]).forEach(function(it){
+      var row = document.createElement('div'); row.className = 'bk-item';
+      var dot = document.createElement('div'); dot.className = 'bk-d bk-' + (it.sev||'warn');
+      var wrap = document.createElement('div');
+      var t = document.createElement('div'); t.className = 'bk-t';
+      t.textContent = it.title || '';
+      if (it.tag){ var tg = document.createElement('span'); tg.className = 'bk-tag'; tg.textContent = it.tag; t.appendChild(tg); }
+      var m = document.createElement('div'); m.className = 'bk-m'; m.textContent = it.why || '';
+      wrap.appendChild(t); wrap.appendChild(m);
+      row.appendChild(dot); row.appendChild(wrap); card.appendChild(row);
+    });
+    box.appendChild(card);
+
+    if ((b.facts||[]).length){
+      var fc = document.createElement('div'); fc.className = 'bk-card';
+      var fh = document.createElement('h3'); fh.textContent = '事实卡片 · ' + b.facts_count + ' 张';
+      fc.appendChild(fh);
+      var bySubject = {};
+      b.facts.forEach(function(f){ (bySubject[f.subject] = bySubject[f.subject] || []).push(f); });
+      Object.keys(bySubject).forEach(function(subj){
+        var sh = document.createElement('div'); sh.className = 'bk-row';
+        sh.style.marginTop = '8px'; sh.style.color = '#b9c8dd';
+        var s1 = document.createElement('span'); s1.textContent = subj;
+        var s2 = document.createElement('span'); s2.textContent = bySubject[subj].length + ' 张';
+        sh.appendChild(s1); sh.appendChild(s2); fc.appendChild(sh);
+        bySubject[subj].forEach(function(f){
+          var row = document.createElement('div'); row.className = 'bk-f';
+          var k1 = document.createElement('span'); k1.className = 'k'; k1.textContent = f.key;
+          var v1 = document.createElement('span'); v1.className = 'v'; v1.textContent = f.value;
+          var c1 = document.createElement('span'); c1.className = 'c';
+          c1.textContent = f.conf.toFixed(2);
+          if (f.conf < 0.6) c1.style.color = '#f0b429';
+          row.appendChild(k1); row.appendChild(v1); row.appendChild(c1); fc.appendChild(row);
+        });
+      });
+      box.appendChild(fc);
+    }
+
+    if (b.by_kind && Object.keys(b.by_kind).length){
+      var mc = document.createElement('div'); mc.className = 'bk-card';
+      var mh = document.createElement('h3'); mh.textContent = '记忆构成 · ' + b.mem_total + ' 条';
+      mc.appendChild(mh);
+      var bar = document.createElement('div'); bar.className = 'bk-bar';
+      var total = b.mem_total || 1;
+      var colors = {episode:'#4d8dff', fact:'#f0b429', reflection:'#a78bfa'};
+      Object.keys(b.by_kind).forEach(function(kd){
+        var i2 = document.createElement('i');
+        i2.style.width = Math.round(b.by_kind[kd] / total * 100) + '%';
+        i2.style.background = colors[kd] || '#7fe0a8';
+        bar.appendChild(i2);
+      });
+      mc.appendChild(bar);
+      var lg = document.createElement('div'); lg.className = 'bk-m';
+      lg.textContent = Object.keys(b.by_kind).map(function(kd){ return kd + ' ' + b.by_kind[kd]; }).join(' · ');
+      mc.appendChild(lg);
+      var rec = document.createElement('div'); rec.className = 'bk-m';
+      rec.textContent = '近 7 天新增 ' + (b.recent7||[]).reduce(function(a,c){return a+c;},0) +
+                        ' 条 · 最长未更新 ' + (b.max_stale_days||0) + ' 天';
+      mc.appendChild(rec);
+      box.appendChild(mc);
+    }
+  });
+}
 
 async function loadVersion(){
   try{
@@ -471,6 +636,86 @@ class H(BaseHTTPRequestHandler):
 
     def do_GET(self):  # noqa: N802
         path = self.path.split("?")[0]
+        if path == "/api/brain":
+            which = "mike"
+            if "which=mike" in self.path:
+                which = "mike"
+            elif "which=xia07" in self.path:
+                which = "xia07"
+            try:
+                r = ssh("python3 /opt/astrbot/data/brain_export.py " + which, timeout=60)
+                g = json.loads(r.stdout if isinstance(r.stdout, str) else "{}")
+                body = json.dumps({"data": {"graph": g}}, ensure_ascii=False).encode()
+            except Exception as e:
+                body = json.dumps({"data": {"graph": {"nodes": [], "edges": [], "memories": []}},
+                                   "error": str(e)[:200]}).encode()
+            self._send(200, "application/json", body)
+            return
+
+        if path == "/api/brain-check":
+            try:
+                r = ssh("python3 /opt/botmon/brain_check.py", timeout=60)
+                body = r.stdout if isinstance(r.stdout, str) else "{}"
+            except Exception as e:
+                body = json.dumps({"error": str(e)[:200]})
+            self._send(200, "application/json", body.encode("utf-8"))
+            return
+
+        if path == "/astrbot-xia07/brain-view.html":
+            fp2 = os.path.join(BRAIN_DIR, "brain-view.html")
+            if os.path.isfile(fp2):
+                h2 = open(fp2, encoding="utf-8", errors="replace").read()
+                h2 = h2.replace("<head>", "<head>" + BRAIN_PROBE, 1)
+                self._send(200, "text/html; charset=utf-8", h2.encode())
+            else:
+                self._send(404, "text/plain", b"brain-view missing")
+            return
+
+        if path.startswith("/astrbot-xia07/brain"):
+            # 数据接口：和 DSH 同一个脚本、同一个 URL 形状
+            if path == "/astrbot-xia07/brain/data":
+                which = "xia07" if "which=xia07" in self.path else "mike"
+                try:
+                    r = ssh("python3 /opt/astrbot/data/brain_export.py " + which, timeout=60)
+                    body = r.stdout if isinstance(r.stdout, str) else "{}"
+                except Exception as e:
+                    body = json.dumps({"ok": False, "error": str(e)[:200]})
+                self._send(200, "application/json", body.encode("utf-8"))
+                return
+
+            # 静态资源：/brain/assets/xxx 与 /brain/xxx（module.js、brain-view.html）
+            rel = path[len("/astrbot-xia07/brain"):].lstrip("/")
+            if rel.startswith("assets/"):
+                rel = rel[len("assets/"):]
+            if not rel:
+                rel = "brain.html"
+            fp = os.path.normpath(os.path.join(BRAIN_DIR, rel.replace("/", os.sep)))
+            base = os.path.normpath(BRAIN_DIR)
+            if not fp.startswith(base) or not os.path.isfile(fp):
+                self._send(404, "text/plain", ("not found: " + rel).encode())
+                return
+
+            low = fp.lower()
+            if low.endswith(".html"):
+                html = open(fp, encoding="utf-8", errors="replace").read()
+                # 页内相对/绝对路径都指向本项目；探针帮我们在没有控制台时看到错误
+                html = html.replace('href="/astrbot-xia07/panel"', 'href="#"')
+                html = html.replace("<head>", "<head>" + BRAIN_PROBE, 1)
+                self._send(200, "text/html; charset=utf-8", html.encode())
+                return
+
+            ctype = "application/octet-stream"
+            if low.endswith(".js"):
+                ctype = "text/javascript; charset=utf-8"
+            elif low.endswith(".json"):
+                ctype = "application/json"
+            for ext, ct in ((".bin", "application/octet-stream"), (".md", "text/plain; charset=utf-8")):
+                if low.endswith(ext):
+                    ctype = ct
+            with open(fp, "rb") as f:
+                self._send(200, ctype, f.read())
+            return
+
         if path == "/api/status":
             with LOCK:
                 body = json.dumps({"data": STATE["data"], "err": STATE["err"],

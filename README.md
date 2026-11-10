@@ -128,6 +128,11 @@ pyinstaller --onefile --windowed --name BotMonitor --icon ../assets/icon.ico ^
 ├── VERSION
 ├── config.example.json
 ├── assets/icon.ico
+├── server/              # 部署到 ECS 的脚本（不属于桌面端）
+│   ├── collect_once.py  # 只读采集：docker/系统/自检
+│   ├── collect_loop.py  # systemd 常驻，每 20 秒跑一次写 /tmp/botmon.json
+│   ├── brain_check.py   # 记忆体检（低置信/陈旧/未命中/卡片缺失）
+│   └── brain_export.py  # brain.db → 3D 脑图数据
 └── src/
     ├── tray.py      # 入口：托盘 + 窗口
     ├── server.py    # 本地 HTTP 服务 + 页面 + SSH 流式采集
@@ -136,6 +141,19 @@ pyinstaller --onefile --windowed --name BotMonitor --icon ../assets/icon.ico ^
     ├── probe.py     # 部署到服务器，只读采集
     └── updater.py   # 版本检查
 ```
+
+---
+
+## 记忆大脑
+
+面板左侧 **◍** 有两个页签：
+
+- **3D 脑图**：和 DSH 插件同源（`brain.html` + `brain-view.html` + `module.js`），
+  数据走 `/astrbot-xia07/brain/data?which=mike|xia07`，同一份 `brain_export.py`
+- **体检**：低置信、超过 30 天未出现、抽取后从未命中、记忆多但无卡片 —— 按严重度排序
+
+> 采集为什么不在桌面端直接跑：这台机器 `docker ps` 要 12 秒、`docker exec` 3~5 秒，
+> 每 15 秒跑一次必然超时。所以服务器上有 `collect_loop.py` 常驻，桌面端只读缓存文件。
 
 ---
 

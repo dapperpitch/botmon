@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>x07 brain</title>
+<style>
+  html, body { margin:0; padding:0; height:100%; background:#05070c; overflow:hidden; }
+  #cortex-canvas { width:100%; height:100%; display:block; }
+  #model-loading { position:absolute; left:12px; top:10px; color:#7fd4ff; font:12px/1.6 system-ui,sans-serif; opacity:.85; }
+  #hud { position:absolute; right:288px; top:10px; color:#8fb6d9; font:12px/1.6 system-ui,sans-serif; text-align:right; }
+
+  #side {
+    position:absolute; right:0; top:0; bottom:0; width:280px;
+    background:linear-gradient(180deg, rgba(10,16,26,.96), rgba(6,10,16,.96));
+    border-left:1px solid #16283c; color:#cfe6ff;
+    font:12px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif;
+    display:flex; flex-direction:column; backdrop-filter: blur(6px);
+  }
+  #side header { padding:10px 12px 8px; border-bottom:1px solid #16283c; }
+  #side header b { font-size:13px; letter-spacing:.04em; }
+  #side header .sub { color:#6f8ca6; font-size:11px; margin-top:2px; }
+  .sec { padding:8px 12px; border-bottom:1px solid #101d2b; }
+  .sec h3 { margin:0 0 6px; font-size:11px; font-weight:600; color:#5f8fb5; letter-spacing:.08em; text-transform:uppercase; }
+  .row { padding:5px 0; border-bottom:1px dotted #132133; cursor:pointer; }
+  .row:last-child { border-bottom:0; }
+  .row:hover { color:#9fe8ff; }
+  .row .meta { color:#5f7d99; font-size:10.5px; }
+  .pill { display:inline-block; padding:0 6px; border-radius:99px; font-size:10px; margin-right:4px; background:#12263a; color:#7fb6dd; }
+  #listSec { flex:1; overflow-y:auto; }
+  #detail { border-top:1px solid #16283c; padding:8px 12px; min-height:70px; color:#9fb9d1; }
+  #detail b { color:#9fe8ff; }
+  .empty { color:#546b82; font-size:11px; }
+  ::-webkit-scrollbar { width:8px; } ::-webkit-scrollbar-thumb { background:#1b2c40; border-radius:8px; }
+</style>
+<script type="importmap">
+{
+  "imports": {
+    "three": "/astrbot-xia07/brain/assets/three/build/three.module.js",
+    "three/addons/": "/astrbot-xia07/brain/assets/three/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+<canvas id="cortex-canvas"></canvas>
+<div id="model-loading">正在加载皮层…</div>
+<div id="hud"></div>
+
+<aside id="side">
+  <header>
+    <b id="brainName">brain</b>
+    <div class="sub" id="brainStat">—</div>
+  </header>
+  <div class="sec" id="nodeSec"><h3>实体</h3><div id="nodeList" class="empty">—</div></div>
+  <div class="sec" id="listSec"><h3>记忆</h3><div id="memList" class="empty">—</div></div>
+  <div id="detail"><span class="empty">点一个节点或一条记忆</span></div>
+</aside>
+
+<script type="module">
+  const params = new URLSearchParams(location.search);
+  const which = params.get('which') === 'xia07' ? 'xia07' : 'mike';
+
+  // 两个脑做视觉区分：小米偏青蓝，夏07 偏洋红
+  const THEME = which === 'xia07'
+    ? { name: '夏07', hue: '135deg', sat: '1.35', bright: '1.05',
+        bg: 'radial-gradient(900px 620px at 60% 42%, #2a0b22 0%, #05070c 62%)',
+        accent: '#ff9ad5', hud: 'right:288px; color:#e9a8d2' }
+    : { name: '小米', hue: '0deg', sat: '1', bright: '1',
+        bg: 'radial-gradient(900px 620px at 40% 42%, #07202b 0%, #05070c 62%)',
+        accent: '#54e7ff', hud: 'right:288px; color:#8fb6d9' };
+  document.body.style.background = THEME.bg;
+  const canvasEl = document.getElementById('cortex-canvas');
+  canvasEl.style.filter = `hue-rotate(${THEME.hue}) saturate(${THEME.sat}) brightness(${THEME.bright})`;
+  document.getElementById('hud').setAttribute('style',
+    `position:absolute; ${THEME.hud}; top:10px; font:12px/1.6 system-ui,sans-serif; text-align:right;`);
+  document.querySelector('#side header b').style.color = THEME.accent;
+  const hud = document.getElementById('hud');
+  const elName = document.getElementById('brainName');
+  const elStat = document.getElementById('brainStat');
+  const elNodes = document.getElementById('nodeList');
+  const elMems = document.getElementById('memList');
+  const elDetail = document.getElementById('detail');
+
+  const KIND_CN = { episode:'经历', fact:'事实', preference:'偏好', relation:'关系', skill:'技能', self:'自我', selfview:'自知', review:'回顾', reflection:'反思' };
+  const TYPE_CN = { person:'人', thing:'物', topic:'话题', place:'地点', skill:'技能', memory:'记忆' };
+  const TYPE_COLOR = { person:'#54e7ff', thing:'#ffc66c', topic:'#bd96ff', place:'#79f3c8', skill:'#f9a0df', memory:'#92caff' };
+  const KIND_COLOR = { episode:'#7fd4ff', fact:'#ffd166', preference:'#ff9ad5', relation:'#b967ff', skill:'#fca2ee', self:'#39ff8f', selfview:'#9dff8f', review:'#79f3c8', reflection:'#7dffcf' };
+
+  let DATA = { nodes: [], edges: [], memories: [] };
+  const memByEntity = new Map();
+
+  function esc(s) { return String(s == null ? '' : s).replace(/[&<>]/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;' }[c])); }
+
+  function renderNodes() {
+    if (!DATA.nodes.length) { elNodes.className = 'empty'; elNodes.textContent = '还没有实体，聊几句就有了'; return; }
+    elNodes.className = '';
+    elNodes.innerHTML = DATA.nodes
+      .slice().sort((a, b) => b.degree - a.degree)
+      .map((n) => `<div class="row" data-node="${n.id}">
+        <span class="pill" style="color:${TYPE_COLOR[n.type] || '#7fb6dd'}">${TYPE_CN[n.type] || n.type}</span>
+        <span>${esc(n.name)}</span>
+        <div class="meta">${n.degree} 条记忆连着</div>
+      </div>`).join('');
+    elNodes.querySelectorAll('[data-node]').forEach((el) => {
+      el.addEventListener('click', () => showNode(Number(el.dataset.node)));
+    });
+  }
+
+  function renderMems() {
+    if (!DATA.memories.length) { elMems.className = 'empty'; elMems.textContent = '还没有记忆，去群里或私聊说两句'; return; }
+    elMems.className = '';
+    elMems.innerHTML = DATA.memories
+      .slice().reverse()
+      .map((m) => `<div class="row" data-mem="${m.id}">
+        <span class="pill" style="color:${KIND_COLOR[m.kind] || '#7fb6dd'}">${KIND_CN[m.kind] || m.kind}</span>
+        <span>${esc(String(m.text).slice(0, 34))}${String(m.text).length > 34 ? '…' : ''}</span>
+        <div class="meta">重要度 ${Number(m.importance).toFixed(2)} · ${m.entities.length} 个实体</div>
+      </div>`).join('');
+    elMems.querySelectorAll('[data-mem]').forEach((el) => {
+      el.addEventListener('click', () => showMem(Number(el.dataset.mem)));
+    });
+  }
+
+  function showNode(id) {
+    const n = DATA.nodes.find((x) => x.id === id);
+    if (!n) return;
+    const mems = memByEntity.get(id) || [];
+    elDetail.innerHTML = `<b>${esc(n.name)}</b> <span class="pill" style="color:${TYPE_COLOR[n.type] || '#7fb6dd'}">${TYPE_CN[n.type] || n.type}</span>
+      <div class="meta" style="color:#5f7d99">${n.degree} 条记忆连着</div>
+      ${mems.slice(0, 6).map((m) => `<div style="margin-top:6px;color:#9fb9d1">· ${esc(m.text)}</div>`).join('') || '<div class="empty" style="margin-top:6px">暂时没有连着的记忆</div>'}`;
+  }
+
+  function showMem(id) {
+    const m = DATA.memories.find((x) => x.id === id);
+    if (!m) return;
+    const names = m.entities.map((eid) => (DATA.nodes.find((n) => n.id === eid) || {}).name).filter(Boolean);
+    elDetail.innerHTML = `<b>#${m.id} ${KIND_CN[m.kind] || m.kind}</b>
+      <div style="margin-top:6px;color:#cfe6ff">${esc(m.text)}</div>
+      <div class="meta" style="color:#5f7d99;margin-top:6px">重要度 ${Number(m.importance).toFixed(2)} · 实体：${names.map(esc).join('、') || '无'}</div>`;
+  }
+
+  async function load() {
+    await import('/astrbot-xia07/brain/module.js');
+    const t0 = Date.now();
+    const res = await fetch(`/astrbot-xia07/brain/data?which=${which}`);
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || 'data failed');
+    DATA = { nodes: data.nodes || [], edges: data.edges || [], memories: data.memories || [] };
+    for (const m of DATA.memories) for (const e of m.entities) {
+      if (!memByEntity.has(e)) memByEntity.set(e, []);
+      memByEntity.get(e).push(m);
+    }
+    const api = window.CortexBrain3D;
+    if (!api || typeof api.setData !== 'function') throw new Error('CortexBrain3D 未就绪');
+    api.setData(DATA);
+    try { api.setOptions && api.setOptions({ density: which === 'xia07' ? 48 : 28 }); } catch (e) {}
+    window.__onSelect = (n) => { if (n && n.id != null) showNode(n.id); };
+
+    elName.textContent = data.label;
+    elStat.textContent = `${DATA.nodes.length} 实体 · ${DATA.edges.length} 关系 · ${DATA.memories.length} 记忆`;
+    hud.textContent = `${data.label} · ${DATA.nodes.length} 节点 / ${DATA.memories.length} 记忆 · ${Date.now() - t0}ms`;
+    renderNodes(); renderMems();
+    document.getElementById('model-loading').style.display = 'none';
+  }
+
+  load().catch((err) => {
+    const el = document.getElementById('model-loading');
+    el.textContent = '加载失败：' + (err && err.message ? err.message : err);
+    el.style.color = '#ff8a8a';
+    console.error(err);
+  });
+</script>
+</body>
+</html>

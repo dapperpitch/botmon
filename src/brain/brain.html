@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>记忆大脑 · 夏07 / 小米</title>
+<style>
+  html, body { margin:0; height:100%; background:#05070c; color:#cfe6ff; font:13px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif; }
+  .top { display:flex; align-items:center; gap:10px; padding:8px 14px; border-bottom:1px solid #12202e; background:#070c13; }
+  .tabs { display:flex; gap:6px; }
+  .tab { padding:5px 16px; border-radius:99px; border:1px solid #1a2a3d; color:#7593ae; cursor:pointer; font-size:13px; user-select:none; }
+  .tab.on { color:#06121d; background:#54e7ff; border-color:#54e7ff; font-weight:600; }
+  .tab.on.pink { background:#ff9ad5; border-color:#ff9ad5; }
+  .spacer { flex:1; }
+  .hint { color:#5f7d99; font-size:11.5px; }
+  .hint a { color:#5aa9d6; text-decoration:none; margin-left:10px; }
+  iframe { display:block; width:100%; border:0; background:#05070c; height:calc(100vh - 46px); }
+</style>
+</head>
+<body>
+<div class="top">
+  <div class="tabs">
+    <div class="tab on" data-w="mike">小米</div>
+    <div class="tab" data-w="xia07">夏07</div>
+  </div>
+  <div class="spacer"></div>
+  <div class="hint">切换看各自的 brain.db<a href="/astrbot-xia07/panel">记忆库 →</a></div>
+</div>
+<iframe id="view" allow="webgl" src="/astrbot-xia07/brain-view.html?which=mike"></iframe>
+<script>
+  const view = document.getElementById('view');
+  function select(w) {
+    document.querySelectorAll('.tab').forEach((t) => {
+      const on = t.dataset.w === w;
+      t.classList.toggle('on', on);
+      t.classList.toggle('pink', on && w === 'xia07');
+    });
+    view.src = `/astrbot-xia07/brain-view.html?which=${w}`;
+    try { localStorage.setItem('brain.which', w); } catch (e) {}
+  }
+  document.querySelectorAll('.tab').forEach((t) => t.addEventListener('click', () => select(t.dataset.w)));
+  let saved = 'mike';
+  try { saved = localStorage.getItem('brain.which') || 'mike'; } catch (e) {}
+  if (saved === 'xia07') select('xia07');
+</script>
+</body>
+</html>
