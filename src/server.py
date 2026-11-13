@@ -209,7 +209,7 @@ ACTIONS = {
 }
 
 PAGE = """<!doctype html><html lang="zh"><head><meta charset="utf-8">
-<title>夏07 / 小米 监测台</title>
+<title>夏07 / 贾维斯 监测台</title>
 <style>
  :root{--bg:#0b0d12;--card:#151a23;--line:#232b38;--txt:#e8ecf4;--dim:#8b95a8;
        --ok:#39d98a;--warn:#f0b429;--bad:#ff5c5c}
@@ -319,7 +319,7 @@ PAGE = """<!doctype html><html lang="zh"><head><meta charset="utf-8">
 </div>
 <div class="wrap">
 <div class="view on" id="view-status">
-<h1>夏07 / 小米 监测台</h1>
+<h1>夏07 / 贾维斯 监测台</h1>
 <div class="sub" id="sub">连接中…</div>
 
 <div class="grid">
@@ -334,8 +334,8 @@ PAGE = """<!doctype html><html lang="zh"><head><meta charset="utf-8">
   </div>
 
   <div class="card">
-    <h2>小米 · NapCat 协议端</h2>
-    <div class="row"><span class="name"><span class="dot" id="midot"></span>小米</span>
+    <h2>贾维斯 · NapCat 协议端</h2>
+    <div class="row"><span class="name"><span class="dot" id="midot"></span>贾维斯</span>
       <span id="mistate" class="v">—</span></div>
     <div class="row"><span class="k">API</span><span class="v" id="miapi">—</span></div>
     <div class="row"><span class="k">二维码</span><span class="v" id="miqr">—</span></div>
@@ -373,7 +373,7 @@ PAGE = """<!doctype html><html lang="zh"><head><meta charset="utf-8">
 
 <!--STARMAP_VIEW-->
 
-<div class="view" id="view-audit"><h1>审计</h1><div class="card"><h2>小米 · 群聊自检</h2><div id="aud-more" class="sub"></div></div></div>
+<div class="view" id="view-audit"><h1>审计</h1><div class="card"><h2>贾维斯 · 群聊自检</h2><div id="aud-more" class="sub"></div></div></div>
 
 <div class="view" id="view-brain">
 <h1>记忆大脑</h1>
@@ -387,10 +387,10 @@ PAGE = """<!doctype html><html lang="zh"><head><meta charset="utf-8">
 <div class="view" id="view-settings"><h1>设置</h1><div class="card" style="max-width:520px"><h2>版本</h2><div class="row"><span class="k">当前版本</span><span class="v" id="set-ver">—</span></div><div class="row"><span class="k">最新版本</span><span class="v" id="set-remote">—</span></div><div class="row"><span class="k">更新状态</span><span class="v" id="upd-msg">—</span></div><div id="upd-bar-wrap" style="display:none;margin:8px 0;height:6px;background:#2a2f3a;border-radius:3px;overflow:hidden"><div id="upd-bar" style="height:6px;width:0%;background:#5b8def"></div></div><div class="btns"><button onclick="checkUpdate()">检查更新</button><button id="btn-dl" style="display:none" onclick="downloadUpdate()">下载更新</button><button id="btn-apply" style="display:none" onclick="applyUpdate()">重启安装</button><button id="btn-rb" style="display:none" onclick="rollbackNow()">回滚到上一版</button><button onclick="openRepo()">打开仓库</button></div><pre id="set-notes" style="display:none"></pre></div></div>
 
 <div class="btns">
-  <button class="danger" onclick="act('restart-napcat','确定重启小米？会掉线约 20 秒，登录态保留。')">重启小米</button>
+  <button class="danger" onclick="act('restart-napcat','确定重启贾维斯？会掉线约 20 秒，登录态保留。')">重启贾维斯</button>
   <button class="danger" onclick="act('restart-astrbot','确定重启 AstrBot？所有插件会重载约 30 秒。')">重启 AstrBot</button>
   <button onclick="act('watchdog','跑一次看门狗（会按判定结果告警/重启）')">跑一次看门狗</button>
-  <button onclick="act('logs-napcat','看小米最近日志')">小米日志</button>
+  <button onclick="act('logs-napcat','看贾维斯最近日志')">贾维斯日志</button>
   <button onclick="act('logs-astrbot','看 AstrBot 最近日志')">AstrBot 日志</button>
 </div>
 <pre id="out" style="display:none"></pre>
@@ -445,7 +445,7 @@ async function tick(){
     const s = d.data || {};
     const mi = s.mi || {};
 
-    // 小米
+    // 贾维斯
     let cls = 'off', txt = '掉线';
     if (mi.online) { cls='on'; txt='在线'; }
     else if ((mi.qr_age ?? 999) < 240) { cls='wait'; txt='等扫码'; }
@@ -481,7 +481,7 @@ async function tick(){
     $('watch').textContent = (s.watch||[]).join('\\n') || '—';
     window.__firstOk = true;
     $('sub').textContent = '数据时间 ' + new Date(d.at*1000).toLocaleTimeString() +
-      (mi.online ? ' · 小米在线' : ' · 小米不在线');
+      (mi.online ? ' · 贾维斯在线' : ' · 贾维斯不在线');
 
     const q = await fetch('/qr.png?t='+Date.now(), {cache:'no-store'});
     if (q.ok){ const b = await q.blob(); const u = URL.createObjectURL(b);

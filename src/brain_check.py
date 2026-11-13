@@ -9,7 +9,7 @@ import time
 BASE = "/opt/astrbot/data/plugin_data/"
 BOTS = {
     "xia07": ("astrbot_plugin_memory_brain07", "夏07"),
-    "mike": ("astrbot_plugin_memory_brain", "小米"),
+    "mike": ("astrbot_plugin_memory_brain", "贾维斯"),
 }
 NOW = time.time()
 DAY = 86400

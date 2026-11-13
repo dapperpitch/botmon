@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""夏07 / 小米 监测台 —— 托盘常驻 + 面板窗口。
+"""夏07 / 贾维斯 监测台 —— 托盘常驻 + 面板窗口。
 
 用法： python tools/botmon/tray.py
 打包： pyinstaller --onefile --windowed --name BotMonitor tray.py
@@ -72,10 +72,10 @@ def status():
     if not (cont.get("astrbot") or "").startswith("Up"):
         return "red", "AstrBot 容器没在跑", s
     if mi.get("online"):
-        return "green", "小米在线", s
+        return "green", "贾维斯在线", s
     if (mi.get("qr_age") is not None) and mi["qr_age"] < 240:
-        return "yellow", "小米掉线，等扫码", s
-    return "red", "小米掉线（二维码也停了）", s
+        return "yellow", "贾维斯掉线，等扫码", s
+    return "red", "贾维斯掉线（二维码也停了）", s
 
 
 COLORS = {"green": (52, 199, 123, 255), "yellow": (240, 180, 41, 255),
@@ -87,7 +87,7 @@ def refresh():
     color, text, s = status()
     if ICON:
         ICON.icon = make_icon(COLORS[color])
-        ICON.title = "夏07 / 小米监测台 — %s" % text
+        ICON.title = "夏07 / 贾维斯监测台 — %s" % text
         try:
             ICON.update_menu()
         except Exception:
@@ -119,7 +119,7 @@ def open_panel(icon=None, item=None):
         webbrowser.open(BASE)
         return
     if WINDOW is None:
-        WINDOW = webview.create_window("夏07 / 小米 监测台", BASE,
+        WINDOW = webview.create_window("夏07 / 贾维斯 监测台", BASE,
                                        width=1120, height=820, min_size=(900, 640))
         # 设了 BOTMON_DEBUG=1 就打开开发者工具（右键检查 / F12），排查页面问题用
         _dbg = os.environ.get("BOTMON_DEBUG") == "1"
@@ -153,12 +153,12 @@ def quit_app(icon=None, item=None):
 def build_tray():
     global TRAY
     TRAY = pystray.Icon(
-        "botmon", make_icon(COLORS["green"]), "夏07 / 小米监测台",
+        "botmon", make_icon(COLORS["green"]), "夏07 / 贾维斯监测台",
         menu=pystray.Menu(
             pystray.MenuItem(menu_text, None, enabled=False),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("打开面板", open_panel, default=True),
-            pystray.MenuItem("重启小米（20 秒）", action("restart-napcat")),
+            pystray.MenuItem("重启贾维斯（20 秒）", action("restart-napcat")),
             pystray.MenuItem("重启 AstrBot（30 秒）", action("restart-astrbot")),
             pystray.MenuItem("跑一次看门狗", action("watchdog")),
             pystray.Menu.SEPARATOR,

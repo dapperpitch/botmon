@@ -32,7 +32,7 @@ for line in sh("docker ps --format '{{.Names}}|{{.Status}}'").splitlines():
         n, s = line.split("|", 1)
         out.setdefault("containers", {})[n] = s
 
-# 2) 小米：一次 docker exec 里把 status/login 都取回来
+# 2) 贾维斯：一次 docker exec 里把 status/login 都取回来
 mi = {"api_ok": False, "online": False, "nickname": "", "qr_age": None, "qr_b64": ""}
 tok = ""
 try:

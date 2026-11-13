@@ -3,7 +3,7 @@
 """把 AstrBot 的 brain.db 导出成 3D 脑图要的三个数组。
 
 用法：python3 brain_export.py mike|xia07
-输出：{"ok":true,"label":"小米","nodes":[...],"edges":[...],"memories":[...]}
+输出：{"ok":true,"label":"贾维斯","nodes":[...],"edges":[...],"memories":[...]}
 """
 import json
 import sqlite3
@@ -11,7 +11,7 @@ import sys
 
 BASE = "/opt/astrbot/data/plugin_data/"
 PLUGIN = {
-    "mike": ("astrbot_plugin_memory_brain", "小米"),
+    "mike": ("astrbot_plugin_memory_brain", "贾维斯"),
     "xia07": ("astrbot_plugin_memory_brain07", "夏07"),
 }
 
