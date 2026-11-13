@@ -28,6 +28,49 @@ try:
 except Exception:  # 单文件运行时可能没有同目录模块
     updater = None
 
+try:
+    import apply_update
+except Exception:
+    apply_update = None
+
+# 更新进度（下载线程写，面板轮询读）
+UPDATE_STATE = {"state": "idle", "got": 0, "total": 0, "err": "",
+                "version": "", "path": ""}
+UPDATE_LOCK = threading.Lock()
+
+
+def _j(obj) -> bytes:
+    return json.dumps(obj, ensure_ascii=False).encode()
+
+
+def _update_snapshot() -> dict:
+    with UPDATE_LOCK:
+        return dict(UPDATE_STATE)
+
+
+def _download_worker():
+    def on_progress(got, total):
+        with UPDATE_LOCK:
+            UPDATE_STATE["got"] = got
+            if total:
+                UPDATE_STATE["total"] = total
+
+    r = updater.download(on_progress=on_progress)
+    with UPDATE_LOCK:
+        if r.get("ok"):
+            UPDATE_STATE.update(state="done", got=r.get("size") or 0,
+                                total=r.get("size") or 0,
+                                version=r.get("version") or "",
+                                path=r.get("path") or "", err="")
+        else:
+            UPDATE_STATE.update(state="error", err=r.get("err") or "下载失败")
+
+
+def _exit_soon(delay=1.2):
+    """先把 HTTP 响应发完，再退出进程，让外部 cmd 接手换文件。"""
+    time.sleep(delay)
+    os._exit(0)
+
 BRAIN_PROBE = """
 <script>
 (function(){
@@ -341,7 +384,7 @@ PAGE = """<!doctype html><html lang="zh"><head><meta charset="utf-8">
 <iframe id="brainframe" style="width:100%;height:calc(100vh - 250px);min-height:420px;border:1px solid var(--line);border-radius:14px;background:#05070c"></iframe>
 <div id="braincheck" style="display:none;height:calc(100vh - 250px);overflow:auto"></div>
 
-<div class="view" id="view-settings"><h1>设置</h1><div class="card" style="max-width:520px"><h2>版本</h2><div class="row"><span class="k">当前版本</span><span class="v" id="set-ver">—</span></div><div class="row"><span class="k">最新版本</span><span class="v" id="set-remote">—</span></div><div class="btns"><button onclick="checkUpdate()">检查更新</button><button onclick="openRepo()">打开仓库</button></div><pre id="set-notes" style="display:none"></pre></div></div>
+<div class="view" id="view-settings"><h1>设置</h1><div class="card" style="max-width:520px"><h2>版本</h2><div class="row"><span class="k">当前版本</span><span class="v" id="set-ver">—</span></div><div class="row"><span class="k">最新版本</span><span class="v" id="set-remote">—</span></div><div class="row"><span class="k">更新状态</span><span class="v" id="upd-msg">—</span></div><div id="upd-bar-wrap" style="display:none;margin:8px 0;height:6px;background:#2a2f3a;border-radius:3px;overflow:hidden"><div id="upd-bar" style="height:6px;width:0%;background:#5b8def"></div></div><div class="btns"><button onclick="checkUpdate()">检查更新</button><button id="btn-dl" style="display:none" onclick="downloadUpdate()">下载更新</button><button id="btn-apply" style="display:none" onclick="applyUpdate()">重启安装</button><button id="btn-rb" style="display:none" onclick="rollbackNow()">回滚到上一版</button><button onclick="openRepo()">打开仓库</button></div><pre id="set-notes" style="display:none"></pre></div></div>
 
 <div class="btns">
   <button class="danger" onclick="act('restart-napcat','确定重启小米？会掉线约 20 秒，登录态保留。')">重启小米</button>
@@ -596,7 +639,75 @@ async function checkUpdate(){
     document.getElementById('set-remote').textContent = d.newer ? ('v' + d.remote + '（有新版）') : ('v' + d.remote + '（已是最新）');
     n.style.display = d.notes ? 'block' : 'none';
     n.textContent = d.notes || '';
+    const dl = document.getElementById('btn-dl');
+    dl.style.display = d.newer ? '' : 'none';
+    if (d.newer) updMsg('可以更新到 v' + d.remote);
   }catch(e){ document.getElementById('set-remote').textContent = '检查失败'; }
+  refreshUpdateState();
+}
+
+function updMsg(t){ document.getElementById('upd-msg').textContent = t || '—'; }
+function updBar(pct){
+  const w = document.getElementById('upd-bar-wrap'), b = document.getElementById('upd-bar');
+  if (pct == null){ w.style.display='none'; b.style.width='0%'; return; }
+  w.style.display='block'; b.style.width = Math.max(0, Math.min(100, pct)).toFixed(1)+'%';
+}
+
+async function refreshUpdateState(){
+  try{
+    const s = await (await fetch('/api/update/status',{cache:'no-store'})).json();
+    document.getElementById('btn-apply').style.display = s.staged ? '' : 'none';
+    document.getElementById('btn-rb').style.display = s.can_rollback ? '' : 'none';
+    if (s.pending && s.pending.to && s.pending.to !== s.local)
+      updMsg('上次更新到 v' + s.pending.to + ' 未生效，可以回滚');
+    else if (s.staged)
+      updMsg('已下载 v' + s.staged_ver + '，点「重启安装」生效');
+    else if (s.pending && s.pending.to)
+      updMsg('更新到 v' + s.pending.to + ' 待确认');
+    return s;
+  }catch(e){ return null; }
+}
+
+let _pollTimer = null;
+
+async function downloadUpdate(){
+  document.getElementById('btn-dl').style.display='none';
+  updMsg('正在下载…'); updBar(0);
+  try{
+    const r = await (await fetch('/api/update/download',{method:'POST'})).json();
+    if (!r.ok){ updMsg('下载失败：' + (r.err||'未知')); updBar(null); return; }
+  }catch(e){ updMsg('下载请求失败'); updBar(null); return; }
+  if (_pollTimer) clearInterval(_pollTimer);
+  _pollTimer = setInterval(async () => {
+    try{
+      const p = await (await fetch('/api/update/progress',{cache:'no-store'})).json();
+      if (p.state === 'downloading'){
+        const pct = p.total ? (p.got / p.total * 100) : 0;
+        updBar(pct);
+        updMsg('下载中 ' + (p.got/1048576).toFixed(1) + ' / ' +
+               (p.total ? (p.total/1048576).toFixed(1) : '?') + ' MB');
+      } else if (p.state === 'done'){
+        clearInterval(_pollTimer); _pollTimer = null;
+        updBar(100); updMsg('下载完成 v' + (p.version||'') + '，点「重启安装」');
+        refreshUpdateState();
+      } else if (p.state === 'error'){
+        clearInterval(_pollTimer); _pollTimer = null;
+        updBar(null); updMsg('下载失败：' + (p.err||'未知'));
+      }
+    }catch(e){}
+  }, 600);
+}
+
+async function applyUpdate(){
+  if (!confirm('现在重启程序并安装新版本？\n\n会先退出当前窗口，替换完成后自动重新打开。\n旧版本会保留，万一新版本起不来可以在设置里回滚。')) return;
+  updMsg('正在退出并安装…');
+  try{ await fetch('/api/update/apply',{method:'POST'}); }catch(e){}
+}
+
+async function rollbackNow(){
+  if (!confirm('回滚到上一版本？\n\n会先退出当前窗口，然后换回旧版并重新打开。')) return;
+  updMsg('正在回滚…');
+  try{ await fetch('/api/update/rollback',{method:'POST'}); }catch(e){}
 }
 
 function openRepo(){ window.open('https://github.com/dapperpitch/botmon', '_blank'); }
@@ -742,6 +853,13 @@ class H(BaseHTTPRequestHandler):
             body = json.dumps(updater.check() if updater else {"err": "updater 未加载"},
                               ensure_ascii=False).encode()
             self._send(200, "application/json", body)
+        elif path == "/api/update/status":
+            data = apply_update.status() if apply_update else {"err": "apply_update 未加载"}
+            self._send(200, "application/json",
+                       json.dumps(data, ensure_ascii=False).encode())
+        elif path == "/api/update/progress":
+            self._send(200, "application/json",
+                       json.dumps(_update_snapshot(), ensure_ascii=False).encode())
         elif path == "/qr.png":
             with LOCK:
                 png = STATE["qr"]
@@ -769,6 +887,44 @@ class H(BaseHTTPRequestHandler):
             except Exception:
                 pass
             self._send(200, "application/json", b'{"ok":true}')
+            return
+        if path == "/api/update/download":
+            if not (updater and apply_update):
+                self._send(200, "application/json", _j({"ok": False, "err": "更新模块未加载"}))
+                return
+            with UPDATE_LOCK:
+                busy = UPDATE_STATE.get("state") == "downloading"
+            if busy:
+                self._send(200, "application/json", _j({"ok": False, "err": "正在下载中"}))
+                return
+            with UPDATE_LOCK:
+                UPDATE_STATE.update(state="downloading", got=0, total=0,
+                                    err="", version="", path="")
+            threading.Thread(target=_download_worker, daemon=True).start()
+            self._send(200, "application/json", b'{"ok":true}')
+            return
+        if path == "/api/update/apply":
+            if not apply_update:
+                self._send(200, "application/json", _j({"ok": False, "err": "apply_update 未加载"}))
+                return
+            st = apply_update.status()
+            if not st.get("staged"):
+                self._send(200, "application/json",
+                           _j({"ok": False, "err": "还没有下载好的新版本"}))
+                return
+            r = apply_update.apply(st["staged"], st.get("staged_ver") or "")
+            self._send(200, "application/json", _j(r))
+            if r.get("ok"):
+                threading.Thread(target=_exit_soon, daemon=True).start()
+            return
+        if path == "/api/update/rollback":
+            if not apply_update:
+                self._send(200, "application/json", _j({"ok": False, "err": "apply_update 未加载"}))
+                return
+            r = apply_update.rollback()
+            self._send(200, "application/json", _j(r))
+            if r.get("ok"):
+                threading.Thread(target=_exit_soon, daemon=True).start()
             return
         if path != "/api/action":
             self._send(404, "application/json", b'{"err":"not found"}')

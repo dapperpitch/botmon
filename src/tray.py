@@ -177,8 +177,32 @@ def watcher():
         time.sleep(6)
 
 
+def _update_boot():
+    """启动自愈：上次换文件断在半路的话，把旧版还原回来。
+
+    顺手在程序目录放一份 rollback.cmd —— 万一新版本起不来，
+    用户双击它就能退回上一版，不需要程序自己活着。
+    """
+    try:
+        import apply_update
+    except Exception:
+        return
+    try:
+        info = apply_update.recover()
+        if info.get("restored"):
+            print("[update] 上次替换中断，已还原上一版", flush=True)
+        if info.get("updated_to"):
+            print("[update] 已更新到 v%s" % info["updated_to"], flush=True)
+        if info.get("failed_to"):
+            print("[update] v%s 没能生效，可在设置里回滚" % info["failed_to"], flush=True)
+        apply_update.write_rollback_cmd()
+    except Exception as e:  # noqa: BLE001
+        print("[update] 启动自愈失败: %s" % e, flush=True)
+
+
 def main():
     global ICON
+    _update_boot()
     threading.Thread(target=botmon.stream_loop, daemon=True).start()
     threading.Thread(target=lambda: botmon.ThreadingHTTPServer(
         ("127.0.0.1", PORT), botmon.H).serve_forever(), daemon=True).start()

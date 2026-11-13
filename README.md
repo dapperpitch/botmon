@@ -116,10 +116,29 @@ pyinstaller --onefile --windowed --name BotMonitor --icon ../assets/icon.ico ^
 ## 版本与更新
 
 - 仓库：<https://github.com/dapperpitch/botmon>（「设置 → 打开仓库」跳这里）
-- 版本号在 `VERSION`；「设置 → 检查更新」读 GitHub Releases 比对
-- **不自动下载替换**：更新中途断电、杀毒误报、文件占用这些没处理好之前，
-  自动替换只会把软件搞坏
-- 发版：改 `VERSION` → `git tag v0.4.0` → Releases 上传 exe
+- 版本号在 `VERSION`；「设置 → 检查更新」比对 GitHub Releases
+- 发版：改 `VERSION` → 提交 → Releases 传 exe
+
+**更新分三步，每一步都能单独失败而不弄坏程序：**
+
+1. **检查**：读 `github.com/<repo>/releases/latest` 的 302 跳转拿版本号
+   （**不走 api.github.com**——这台机器上它比 github.com 更容易连不上），
+   API 只用来补 release notes 和附件大小，连不上也不影响能不能更新
+2. **下载**：下到程序同目录 `BotMonitor-<版本>.new.exe`，边下边显示进度；
+   下完核对字节数（对不上就删掉重来），有 `digest` 时再核 SHA256
+3. **重启安装**：程序**不会在运行中覆盖自己**（Windows 会锁住 exe）。
+   它只生成一个只做 `move`+`start` 的 cmd，然后退出；
+   cmd 等进程消失→旧版改名 `.old`→新版改名正式名→重新启动
+
+**回滚**：`.old` 会一直留着。设置页有「回滚到上一版」；
+程序目录还有一份 `rollback.cmd`，**新版本根本起不来时双击它就行**。
+
+**断电安全**：替换前先记 `update_pending.json`，启动时 `recover()` 检查——
+如果 exe 不见了但 `.old` 在，自动还原；如果版本没变成目标版本且已过 5 分钟，
+面板会提示上次更新失败。
+
+> 故意**不做静默自动更新**：更新只在用户点「重启安装」后发生。
+> 半夜自己换版本、换坏了没人看到，是最糟的失败方式。
 
 ---
 
@@ -181,13 +200,13 @@ pyinstaller --onefile --windowed --name BotMonitor --icon ../assets/icon.ico ^
 
 ## 开发状态
 
-**v0.5.1** — 仓库迁到 `dapperpitch/botmon`，版本检查指向新地址
+**v0.6.0** — 自动更新与回滚（下载带进度、外部 cmd 换文件、断电自愈、一键回滚）
 
 - [x] v0.2 图标导航、设置页、版本检查
 - [x] v0.3 知识星图
 - [x] v0.4 三维银河（透视、景深、形态切换、加载进度）
 - [x] v0.5 脑图（记忆 / 实体关系）
-- [ ] v0.6 自动更新与回滚
+- [x] v0.6 自动更新与回滚
 - [ ] v0.7 语音试听、审计详情页
 
 ## 许可
