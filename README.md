@@ -203,7 +203,7 @@ pyinstaller --onefile --windowed --name BotMonitor --icon ../assets/icon.ico ^
 
 ## 开发状态
 
-**v0.6.0** — 自动更新与回滚（下载带进度、外部 cmd 换文件、断电自愈、一键回滚）
+**v0.6.1** — 自动更新可用性打磨：断点续传 / 重试 / MOTW 清理，设置页即时刷新更新状态
 
 - [x] v0.2 图标导航、设置页、版本检查
 - [x] v0.3 知识星图

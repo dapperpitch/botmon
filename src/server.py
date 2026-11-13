@@ -502,6 +502,8 @@ document.querySelectorAll('.rbtn').forEach(b=>{
       const f = document.getElementById('brainframe');
       if (f && !f.src) f.src = '/astrbot-xia07/brain';
     }
+    // 进设置页就刷新一次更新状态：否则「已下载好/可回滚」要等你点过“检查更新”才显形
+    if (b.dataset.p === 'settings') refreshUpdateState();
     if (el) el.classList.add('on');
   };
 });
