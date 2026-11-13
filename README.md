@@ -125,7 +125,10 @@ pyinstaller --onefile --windowed --name BotMonitor --icon ../assets/icon.ico ^
    （**不走 api.github.com**——这台机器上它比 github.com 更容易连不上），
    API 只用来补 release notes 和附件大小，连不上也不影响能不能更新
 2. **下载**：下到程序同目录 `BotMonitor-<版本>.new.exe`，边下边显示进度；
-   下完核对字节数（对不上就删掉重来），有 `digest` 时再核 SHA256
+   **断了会带 Range 从 `.part` 已有字节续传**，最多重试 5 轮（走日本节点，37 MB
+   中途断一次很常见，第一版没有续传时一次超时就整个白下）；
+   下完核对字节数，有 `digest` 时再核 SHA256，不对就删掉重来；
+   顺手清掉 `Zone.Identifier`（MOTW），避免启动时弹 SmartScreen
 3. **重启安装**：程序**不会在运行中覆盖自己**（Windows 会锁住 exe）。
    它只生成一个只做 `move`+`start` 的 cmd，然后退出；
    cmd 等进程消失→旧版改名 `.old`→新版改名正式名→重新启动

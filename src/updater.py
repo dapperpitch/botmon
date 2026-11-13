@@ -16,6 +16,7 @@ import os
 import re
 import ssl
 import sys
+import time
 import urllib.error
 import urllib.request
 
@@ -184,6 +185,46 @@ def sha256(path: str) -> str:
     return h.hexdigest()
 
 
+def motw_present(path: str) -> bool:
+    """有没有 Zone.Identifier 流。
+
+    注意不能用 os.path.exists：它对「文件:流」这种路径永远返回 False。
+    只能真去打开看看。
+    """
+    try:
+        with open(path + ":Zone.Identifier", "rb"):
+            return True
+    except OSError:
+        return False
+
+
+def strip_motw(path: str) -> bool:
+    """去掉 Zone.Identifier（Mark-of-the-Web）。
+
+    程序自己用 urllib 下载的文件本来就不带这个标记（只有浏览器/资源管理器会加），
+    所以这一步是防御性的：万一 staged 文件是别处拷来的，带 MOTW 启动会弹
+    SmartScreen「Windows 已保护你的电脑」，用户会以为是病毒。
+
+    删除用 DeleteFileW —— 它能直接删掉 ADS；删不掉就截断成空流（空流等于没有区域信息）。
+    """
+    if not motw_present(path):
+        return False
+    ads = path + ":Zone.Identifier"
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            if ctypes.windll.kernel32.DeleteFileW(ctypes.c_wchar_p(ads)):
+                return not motw_present(path)
+        except Exception:
+            pass
+    try:
+        with open(ads, "r+b") as f:
+            f.truncate(0)
+        return True
+    except Exception:
+        return False
+
+
 def cleanup_stage(keep: str = ""):
     """删掉上次残留的 .new.exe / .part，只留下 keep。"""
     try:
@@ -202,8 +243,49 @@ def cleanup_stage(keep: str = ""):
         pass
 
 
-def download(on_progress=None, timeout=30, force=False) -> dict:
-    """下载最新 exe 到程序目录。返回 {ok, path, size, version, err, sha}。
+RETRIES = 5          # 断了就续，最多 5 轮
+CHUNK = 1 << 18
+
+
+def _fetch_into(part: str, timeout: int, expected: int, on_progress=None):
+    """把 DOWNLOAD 的内容续写进 part（支持 Range 断点续传）。返回 (got, total)。"""
+    start = os.path.getsize(part) if os.path.exists(part) else 0
+    headers = {"User-Agent": _ua(), "Accept": "application/octet-stream"}
+    if start:
+        headers["Range"] = "bytes=%d-" % start
+    req = urllib.request.Request(DOWNLOAD, headers=headers)
+    with _urlopen(req, timeout) as resp:
+        code = getattr(resp, "status", None) or 200
+        clen = int(resp.headers.get("Content-Length") or 0)
+        if start and code == 206:
+            total = (start + clen) if clen else (expected or 0)
+            mode, got = "ab", start
+        else:
+            # 服务器不认 Range：只能从头写
+            total, mode, got = (clen or expected or 0), "wb", 0
+        with open(part, mode) as f:
+            while True:
+                buf = resp.read(CHUNK)
+                if not buf:
+                    break
+                f.write(buf)
+                got += len(buf)
+                if on_progress:
+                    try:
+                        on_progress(got, total)
+                    except Exception:
+                        pass
+            f.flush()
+            os.fsync(f.fileno())
+    return got, total
+
+
+def download(on_progress=None, timeout=60, force=False) -> dict:
+    """下载最新 exe 到程序目录（断点续传 + 自动重试）。
+
+    这台机器走日本节点，37 MB 中途断一次很常见：第一版没有续传，
+    一次超时整个下载就白费。现在失败会带着 Range 从 `.part` 已有字节继续，
+    最多 RETRIES 轮；最终仍要以字节数和 SHA256 为准。
 
     只下载，不替换：真正换文件在 apply() 里，由外部 cmd 等本进程退出后做。
     """
@@ -218,48 +300,58 @@ def download(on_progress=None, timeout=30, force=False) -> dict:
     part = dest + ".part"
     expected = int((r.get("asset") or {}).get("size") or 0)
     try:
-        cleanup_stage()
-        req = urllib.request.Request(
-            DOWNLOAD, headers={"User-Agent": _ua(), "Accept": "application/octet-stream"})
-        got = 0
-        with _urlopen(req, timeout) as resp:
-            total = int(resp.headers.get("Content-Length") or expected or 0)
-            with open(part, "wb") as f:
-                while True:
-                    buf = resp.read(1 << 18)
-                    if not buf:
-                        break
-                    f.write(buf)
-                    got += len(buf)
-                    if on_progress:
-                        try:
-                            on_progress(got, total)
-                        except Exception:
-                            pass
-                f.flush()
-                os.fsync(f.fileno())
-        size = os.path.getsize(part)
-        if total and size != total:
-            os.remove(part)
-            return {"ok": False, "err": "下载不完整（%d/%d 字节）" % (size, total)}
-        if expected and size != expected:
-            os.remove(part)
-            return {"ok": False, "err": "大小与 Release 不符（%d≠%d）" % (size, expected)}
-        os.replace(part, dest)
-        digest = (r.get("asset") or {}).get("digest") or ""
-        sha = sha256(dest)
-        if digest.startswith("sha256:") and digest.split(":", 1)[1].lower() != sha:
-            os.remove(dest)
-            return {"ok": False, "err": "哈希校验失败"}
-        return {"ok": True, "path": dest, "size": size, "version": ver,
-                "sha": sha, "err": ""}
-    except Exception as e:  # noqa: BLE001
+        cleanup_stage(keep=part)       # 上次没下完的 .part 留着续传
+    except Exception:
+        pass
+
+    last_err = ""
+    for attempt in range(1, RETRIES + 1):
         try:
-            if os.path.exists(part):
-                os.remove(part)
+            got, total = _fetch_into(part, timeout, expected, on_progress)
+        except urllib.error.HTTPError as e:
+            if e.code in (401, 403, 404):
+                return {"ok": False, "err": "下载地址返回 HTTP %s（版本或附件不存在）" % e.code}
+            last_err = "HTTP %s" % e.code
+        except Exception as e:  # noqa: BLE001
+            last_err = str(e)[:120]
+        else:
+            size = os.path.getsize(part) if os.path.exists(part) else 0
+            want = expected or total
+            if want and size >= want:
+                if size > want:
+                    # 比预期还大，说明拼错了，删掉重下
+                    try:
+                        os.remove(part)
+                    except Exception:
+                        pass
+                    last_err = "字节数超出预期（%d>%d）" % (size, want)
+                else:
+                    break
+            else:
+                last_err = "不完整（%d/%d）" % (size, want or 0)
+        if attempt < RETRIES:
+            time.sleep(min(2 * attempt, 8))
+
+    if not os.path.exists(part):
+        return {"ok": False, "err": last_err or "下载失败"}
+    size = os.path.getsize(part)
+    want = expected or 0
+    if want and size != want:
+        return {"ok": False, "err": "重试 %d 次仍不完整（%d/%d）：%s" % (RETRIES, size, want, last_err)}
+    try:
+        os.replace(part, dest)
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "err": "落盘失败：%s" % e}
+    strip_motw(dest)
+    digest = (r.get("asset") or {}).get("digest") or ""
+    sha = sha256(dest)
+    if digest.startswith("sha256:") and digest.split(":", 1)[1].lower() != sha:
+        try:
+            os.remove(dest)
         except Exception:
             pass
-        return {"ok": False, "err": str(e)[:200]}
+        return {"ok": False, "err": "哈希校验失败（文件可能损坏，已删除）"}
+    return {"ok": True, "path": dest, "size": size, "version": ver, "sha": sha, "err": ""}
 
 
 def check(timeout=10) -> dict:
