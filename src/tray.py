@@ -200,8 +200,27 @@ def _update_boot():
         print("[update] 启动自愈失败: %s" % e, flush=True)
 
 
+def _already_running() -> bool:
+    """已经有实例在跑？用「自己那一份 /api/version 能不能访问」来判断。
+
+    为什么要有这个：双击快捷方式会起第二个实例，它绑不上 8791，
+    面板就全显示「—」、二维码破图，看着像「连不上服务器」。
+    实测踩过：两个实例同时在跑，用户以为程序坏了。
+    """
+    try:
+        with urllib.request.urlopen(BASE + "/api/version", timeout=2) as r:
+            return r.status == 200
+    except Exception:
+        return False
+
+
 def main():
     global ICON
+    if _already_running():
+        # 已经有实例：别起第二个，直接把已有面板叫到前台
+        print("[botmon] 已有实例在跑，打开它的面板", flush=True)
+        open_panel()
+        return
     _update_boot()
     threading.Thread(target=botmon.stream_loop, daemon=True).start()
     threading.Thread(target=lambda: botmon.ThreadingHTTPServer(

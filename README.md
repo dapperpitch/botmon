@@ -203,7 +203,7 @@ pyinstaller --onefile --windowed --name BotMonitor --icon ../assets/icon.ico ^
 
 ## 开发状态
 
-**v0.6.2** — 群里那个 bot 由「小米 / 米珂」改名为 **贾维斯（Jarvis）**，界面与文档全部对齐
+**v0.6.3** — 单实例保护：重复双击不再起第二个实例（以前会绑不上端口、面板全是「—」）
 
 - [x] v0.2 图标导航、设置页、版本检查
 - [x] v0.3 知识星图
