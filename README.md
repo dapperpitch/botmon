@@ -203,7 +203,7 @@ pyinstaller --onefile --windowed --name BotMonitor --icon ../assets/icon.ico ^
 
 ## 开发状态
 
-**v0.6.3** — 单实例保护：重复双击不再起第二个实例（以前会绑不上端口、面板全是「—」）
+**v0.6.4** — 修面板脚本语法错误：`PAGE` 里 JS 字符串的 `\n` 被 Python 吃成真换行，整页脚本不执行（全「—」、二维码破图）
 
 - [x] v0.2 图标导航、设置页、版本检查
 - [x] v0.3 知识星图

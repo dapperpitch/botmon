@@ -408,7 +408,7 @@ function __showBoot(msg){
       'color:#fff;font:12px/1.5 system-ui;padding:8px 14px;white-space:pre-wrap';
     document.body.appendChild(el);
   }
-  el.textContent = '面板脚本异常：\n' + window.__bootErr.slice(-4).join('\n');
+  el.textContent = '面板脚本异常：\\n' + window.__bootErr.slice(-4).join('\\n');
   try{
     fetch('/api/clientlog', {method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({msg: window.__bootErr[window.__bootErr.length-1]})});
@@ -701,13 +701,13 @@ async function downloadUpdate(){
 }
 
 async function applyUpdate(){
-  if (!confirm('现在重启程序并安装新版本？\n\n会先退出当前窗口，替换完成后自动重新打开。\n旧版本会保留，万一新版本起不来可以在设置里回滚。')) return;
+  if (!confirm('现在重启程序并安装新版本？\\n\\n会先退出当前窗口，替换完成后自动重新打开。\\n旧版本会保留，万一新版本起不来可以在设置里回滚。')) return;
   updMsg('正在退出并安装…');
   try{ await fetch('/api/update/apply',{method:'POST'}); }catch(e){}
 }
 
 async function rollbackNow(){
-  if (!confirm('回滚到上一版本？\n\n会先退出当前窗口，然后换回旧版并重新打开。')) return;
+  if (!confirm('回滚到上一版本？\\n\\n会先退出当前窗口，然后换回旧版并重新打开。')) return;
   updMsg('正在回滚…');
   try{ await fetch('/api/update/rollback',{method:'POST'}); }catch(e){}
 }
