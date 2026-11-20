@@ -470,6 +470,19 @@ async function tick(){
     $('miaudit').textContent = fmt(a.mi);
     $('x7audit').textContent = fmt(a.x07);
 
+    // 审计页：把贾维斯最近一次复盘摆出来（这个 div 以前一直是空的）
+    const am = $('aud-more');
+    if (am){
+      const mi = a.mi || {};
+      const parts = [];
+      if (mi.score != null) parts.push('像管家程度 ' + mi.score + '/100');
+      const cnt = Object.entries(mi.counts||{}).map(([k,v]) => k + ' ' + v + ' 次');
+      if (cnt.length) parts.push('各类问题：' + cnt.join('，'));
+      parts.push('待采纳 ' + (mi.pending||0) + ' 条');
+      if (mi.at) parts.push('最近复盘：' + mi.at);
+      am.textContent = parts.join(' · ');
+    }
+
     // 系统
     if (s.mem){ $('mem').textContent = `${(s.mem.used/1024).toFixed(1)} / ${(s.mem.total/1024).toFixed(1)} G`;
       $('membar').style.width = (s.mem.used/s.mem.total*100).toFixed(0)+'%'; }

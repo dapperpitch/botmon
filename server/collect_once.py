@@ -102,6 +102,14 @@ for key, path in (("mi", "/opt/astrbot/data/mi_audit/patches.json"),
         p = json.load(open(path, encoding="utf-8"))
         out["audit"][key] = {"counts": {k: v.get("n") for k, v in (p.get("counts") or {}).items()},
                              "pending": len(p.get("pending") or [])}
+        # 最近一次复盘的分数（贾维斯是「像管家程度」，夏07 是「像真人程度」）
+        try:
+            d = json.load(open("/opt/astrbot/data/%s_audit/latest.json"
+                               % ("mi" if key == "mi" else "xia07"), encoding="utf-8"))
+            out["audit"][key]["score"] = d.get("score")
+            out["audit"][key]["at"] = d.get("audited_at") or ""
+        except Exception:
+            pass
     except Exception:
         pass
 
